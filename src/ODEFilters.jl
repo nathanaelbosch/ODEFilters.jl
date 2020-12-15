@@ -17,6 +17,7 @@ using UnPack
 using RecipesBase
 using ModelingToolkit
 using RecursiveArrayTools
+using StaticArrays
 
 
 @reexport using PSDMatrices

@@ -39,9 +39,6 @@ function DiffEqBase.savevalues!(
     # Do whatever OrdinaryDiffEq would do
     out = OrdinaryDiffEq._savevalues!(integrator, force_save, reduce_size)
 
-    # stuff that would normally be in apply_step!
-    copy!(integrator.cache.x, integrator.cache.x_filt)
-
     # Save our custom stuff that we need for the posterior
     OrdinaryDiffEq.copyat_or_push!(integrator.sol.x, integrator.saveiter, integrator.cache.x)
     OrdinaryDiffEq.copyat_or_push!(integrator.sol.diffusions, integrator.saveiter, integrator.cache.diffusion)

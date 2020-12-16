@@ -54,6 +54,11 @@ function OrdinaryDiffEq.perform_step!(integ, cache::GaussianODEFilterCache, repe
     mul!(u_filt, SolProj, PI*x_filt.μ)
     integ.u .= u_filt
 
+    # Undo the coordinate change / preconditioning
+    copy!(integ.cache.x, PI * x)
+    copy!(integ.cache.x_pred, PI * x_pred)
+    copy!(integ.cache.x_filt, PI * x_filt)
+
     # Estimate error for adaptive steps
     if integ.opts.adaptive
         err_est_unscaled = estimate_errors(integ, integ.cache)
@@ -61,12 +66,12 @@ function OrdinaryDiffEq.perform_step!(integ, cache::GaussianODEFilterCache, repe
             err_tmp, dt * err_est_unscaled, integ.u, u_filt,
             integ.opts.abstol, integ.opts.reltol, integ.opts.internalnorm, t)
         integ.EEst = integ.opts.internalnorm(err_tmp, t) # scalar
-    end
 
-    # Undo the coordinate change / preconditioning
-    copy!(integ.cache.x, PI * x)
-    copy!(integ.cache.x_pred, PI * x_pred)
-    copy!(integ.cache.x_filt, PI * x_filt)
+        # stuff that would normally be in apply_step!
+        if integ.EEst < one(integ.EEst)
+            copy!(integ.cache.x, integ.cache.x_filt)
+        end
+    end
 end
 
 

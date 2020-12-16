@@ -44,7 +44,7 @@ function DiffEqBase.savevalues!(
 
     # Save our custom stuff that we need for the posterior
     OrdinaryDiffEq.copyat_or_push!(integrator.sol.x, integrator.saveiter, integrator.cache.x)
-    OrdinaryDiffEq.copyat_or_push!(integrator.sol.diffusions, integrator.saveiter, integrator.cache.diffmat)
+    OrdinaryDiffEq.copyat_or_push!(integrator.sol.diffusions, integrator.saveiter, integrator.cache.diffusion)
     OrdinaryDiffEq.copyat_or_push!(integrator.sol.pu, integrator.saveiter, integrator.cache.SolProj*integrator.cache.x)
 
     integrator.sol.log_likelihood += integrator.cache.log_likelihood

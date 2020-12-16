@@ -16,7 +16,7 @@ function estimate_diffusion(rule::FixedDiffusion, integ)
     v, S = measurement.μ, measurement.Σ
 
     if iszero(v)
-        return zero(integ.cache.diffmat)
+        return zero(integ.cache.diffusion)
     end
     if iszero(S)
         return Inf

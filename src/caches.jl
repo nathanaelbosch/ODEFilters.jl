@@ -33,7 +33,7 @@ mutable struct GaussianODEFilterCache{
     K::matType
     G::matType
     covmatcache::matType
-    diffmat::diffusionType
+    diffusion::diffusionType
     err_tmp::uType
     log_likelihood::llType
 end

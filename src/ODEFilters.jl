@@ -23,8 +23,8 @@ using StaticArrays
 @reexport using PSDMatrices
 import PSDMatrices: X_A_Xt
 X_A_Xt(A, X) = X*A*X'
-apply_diffusion(Q, diffmat::Diagonal) = X_A_Xt(Q, sqrt.(diffmat))
-apply_diffusion(Q, diffmat::Number) = Q*diffmat
+apply_diffusion(Q, diffusion::Diagonal) = X_A_Xt(Q, sqrt.(diffusion))
+apply_diffusion(Q, diffusion::Number) = Q*diffusion
 
 
 # All the Gaussian things

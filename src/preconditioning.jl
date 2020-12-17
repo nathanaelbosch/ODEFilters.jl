@@ -1,5 +1,5 @@
 function preconditioner(d, q)
-    P_preallocated = Diagonal(zeros(d*(q+1), d*(q+1)))
+    P_preallocated = Diagonal(zeros(d*(q+1)))
 
     @fastmath @inbounds function P(h)
         @simd for i in 1:d

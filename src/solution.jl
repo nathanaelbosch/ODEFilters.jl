@@ -54,8 +54,12 @@ function DiffEqBase.build_solution(
 
     d = length(prob.u0)
     uEltype = eltype(prob.u0)
-    cov = PSDMatrix(LowerTriangular(zeros(uEltype, d, d)))
-    # cov = zeros(uEltype, d, d)
+    cov = zeros(uEltype, d, d)
+    if alg isa FastEK0
+        cov = SquarerootMatrix(cov)
+    else
+        cov = PSDMatrix(LowerTriangular(cov))
+    end
     pu = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(cov)}}(undef, 0)
     x = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(cov)}}(undef, 0)
 

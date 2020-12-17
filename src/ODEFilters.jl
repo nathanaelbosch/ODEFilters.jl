@@ -73,4 +73,9 @@ include("numerics_tricks.jl")
 include("ieks.jl")
 export IEKS, solve_ieks
 
+# FAST code
+include("fastek0.jl")
+export FastEK0
+include("squarerootmatrix.jl")
+
 end

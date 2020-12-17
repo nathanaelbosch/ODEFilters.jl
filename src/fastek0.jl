@@ -70,8 +70,8 @@ function OrdinaryDiffEq.alg_cache(
     @assert alg.diffusionmodel == :dynamic "FastEK0 only uses dynamic diffusion"
 
     Precond = preconditioner(d, q)
-    # A, Q = ibm(d, q, uEltypeNoUnits)
-    A, Q = vanilla_ibm(d, q, uEltypeNoUnits)
+    A, Q = ibm(d, q, uEltypeNoUnits)
+    # A, Q = vanilla_ibm(d, q, uEltypeNoUnits)
     # Q = Matrix(Q)
     R = zeros(d, d)
 
@@ -120,8 +120,10 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     tnew = t + dt
 
     # Setup
-    Ah, Qh = A(dt), Q(dt)
-    QhL = cholesky(Qh).L
+    T = Precond(dt); TI = inv(T)
+    Ah, QhL = TI*A*T, TI*Q.L
+    HQhL = @view QhL[I1, :]
+    HQH = HQhL*HQhL'
 
     m, P = x.μ, x.Σ
     PL = P.squareroot
@@ -136,7 +138,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     z = du_pred - du
 
     # Calibrate
-    σ² = z' * ((@view Qh[I1, I1]) \ z) / d  # z'inv(H*Q*H')z / d
+    σ² = z' * (HQH \ z) / d  # z'inv(H*Q*H')z / d
     cache.diffusion = σ²
 
     # Predict - Cov
@@ -162,7 +164,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     # Estimate error for adaptive steps
     if integ.opts.adaptive
 
-        err_est_unscaled = sqrt.(σ².*diag(@view Qh[d+1:2d, d+1:2d]))
+        err_est_unscaled = sqrt.(σ².*diag(HQH))
 
         err = DiffEqBase.calculate_residuals(
             dt * err_est_unscaled, integ.u, integ.uprev,

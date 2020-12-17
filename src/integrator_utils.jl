@@ -1,7 +1,7 @@
 # Calibration, smoothing, then jump to the OrdinaryDiffEq._postamble!
 function OrdinaryDiffEq.postamble!(integ::OrdinaryDiffEq.ODEIntegrator{<:AbstractEK})
 
-    if isstatic(integ.cache.diffusionmodel) # Calibrate
+    if hasfield(typeof(integ.cache), :diffusionmodel) && isstatic(integ.cache.diffusionmodel) # Calibrate
         # @warn "sol.log_likelihood is not correct for static diffusion models!"
         integ.sol.log_likelihood = NaN
         final_diff = integ.sol.diffusions[end]

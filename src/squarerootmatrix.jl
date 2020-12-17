@@ -8,6 +8,8 @@ Base.size(M::SquarerootMatrix) = (d = Base.size(M.squareroot)[1]; (d,d))
 Base.getindex(M::SquarerootMatrix, I::Vararg{Int, N}) where {N} =
     getindex(Matrix(M), I...)
 Base.copy(M::SquarerootMatrix) = SquarerootMatrix(copy(M.squareroot))
+Base.copy!(dst::SquarerootMatrix, src::SquarerootMatrix) =
+    (Base.copy!(dst.squareroot, src.squareroot); nothing)
 
 
 X_A_Xt(M::SquarerootMatrix, X::AbstractMatrix) =

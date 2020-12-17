@@ -170,6 +170,7 @@ mutable struct FastEK0Cache{
     IType,
     # Mutable stuff
     uType,
+    mType, PType, SType, KType, PreQRType,
 } <: ODEFiltersCache
     # Constants
     d::Int                  # Dimension of the problem
@@ -206,10 +207,47 @@ mutable struct FastEK0Cache{
     # G::matType
     # covmatcache::matType
     # err_tmp::uType
+
+    m_tmp::mType
+    m_tmp2::mType
+    P_tmp::PType
+    P_tmp2::PType
+    u_tmp::uType
+    u_tmp2::uType
+    z_tmp::uType
+    S_tmp::SType
+    S_tmp2::SType
+    K_tmp::KType
+    K_tmp2::KType
+    preQRmat::PreQRType
 end
 function OrdinaryDiffEq.alg_cache(
     alg::FastEK0, u, rate_prototype, uEltypeNoUnits, uBottomEltypeNoUnits, tTypeNoUnits, uprev, uprev2, f, t, dt, reltol, p, calck, IIP::Val{true})
+
     constants = OrdinaryDiffEq.alg_cache(alg, u, rate_prototype, uEltypeNoUnits, uBottomEltypeNoUnits, tTypeNoUnits, uprev, uprev2, f, t, dt, reltol, p, calck, Val(false))
+
+    @unpack d, q, x = constants
+    D = d*(q+1)
+
+    # Create some arrays to cache into
+    cov = zeros(uEltypeNoUnits, D, D)
+    K = zeros(uEltypeNoUnits, D, D)
+    pre_QR = zeros(uEltypeNoUnits, D, 2D)
+    pre_QR = zeros(uEltypeNoUnits, D, 2D)
+
+    m_tmp = zeros(uEltypeNoUnits, D)
+    m_tmp2 = zeros(uEltypeNoUnits, D)
+    P_tmp = zeros(uEltypeNoUnits, D, D)
+    P_tmp2 = zeros(uEltypeNoUnits, D, D)
+    u_tmp = copy(u)
+    u_tmp2 = copy(u)
+    z_tmp = copy(u)
+    S_tmp = zeros(uEltypeNoUnits, d, d)
+    S_tmp2 = zeros(uEltypeNoUnits, d, d)
+    K_tmp = zeros(uEltypeNoUnits, D, d)
+    K_tmp2 = zeros(uEltypeNoUnits, D, d)
+    preQRmat = zeros(uEltypeNoUnits, 2D, D)
+
 
     return FastEK0Cache{
         typeof(constants.A), typeof(constants.Q),
@@ -219,6 +257,7 @@ function OrdinaryDiffEq.alg_cache(
         typeof(constants.I0),
         # Mutable stuff
         typeof(u),
+        typeof(m_tmp), typeof(P_tmp), typeof(S_tmp), typeof(K_tmp), typeof(preQRmat),
     }(
         constants.d, constants.q, constants.A, constants.Q, constants.R, constants.Proj, constants.SolProj, constants.Precond,
         constants.x, constants.diffusion,
@@ -226,6 +265,8 @@ function OrdinaryDiffEq.alg_cache(
         constants.log_likelihood,
         # Mutable stuff
         copy(u), copy(u),
+        m_tmp, m_tmp2, P_tmp, P_tmp2, u_tmp, u_tmp2, z_tmp, S_tmp, S_tmp2,
+        K_tmp, K_tmp2, preQRmat,
     )
 end
 
@@ -233,7 +274,14 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     @unpack t, dt, f, p = integ
     @unpack d, q, Proj, SolProj, Precond, I0, I1 = integ.cache
     @unpack x, A, Q, R = integ.cache
+
     D = d*(q+1)
+
+    # Load pre-allocated stuff, and assign them to more meaningful variables
+    @unpack tmp, m_tmp, m_tmp2, P_tmp, P_tmp2, z_tmp, u_tmp, u_tmp2, S_tmp, S_tmp2, K_tmp, K_tmp2, preQRmat = integ.cache
+    err_tmp = u_tmp
+    HQH = S_tmp2
+    cov_tmp = P_tmp
 
     tnew = t + dt
 
@@ -241,13 +289,14 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     T = Precond(dt); TI = inv(T)
     Ah, QhL = TI*A*T, TI*Q.L
     HQhL = @view QhL[I1, :]
-    HQH = HQhL*HQhL'
+    mul!(HQH, HQhL, HQhL')
 
     m, P = x.μ, x.Σ
     PL = P.squareroot
 
     # Predict - Mean
-    m_p = Ah*m
+    m_p = m_tmp
+    mul!(m_p, Ah, m)
     u_pred = @view m_p[I0]  # E0 * m_p
     du_pred = @view m_p[I1]  # E1 * m_p
 
@@ -255,6 +304,8 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     du = cache.u
     f(du, u_pred, p, tnew)
     z = du_pred - du
+    du .-= du_pred
+    z_neg = du
 
     # Calibrate
     σ² = z' * (HQH \ z) / d  # z'inv(H*Q*H')z / d
@@ -262,36 +313,45 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
 
     # Predict - Cov
     QhL_calibrated = sqrt(σ²) * QhL
-    _, PpR = qr([Ah*PL QhL_calibrated]')
+    preQRmat[1:D, :] .= PL' * Ah'
+    preQRmat[D+1:end, :] = QhL_calibrated'
+    PpR = qr!(preQRmat).R
     PpL = PpR'
 
     # Measurement Cov
     @assert iszero(R)
     SL = PpL[I1, :]
-    S = SL*SL'
+    mul!(S_tmp, SL, SL')
+    S = S_tmp
 
     # Update
     Sinv = inv(S)
-    K = PpL * (PpL[I1, :])' * Sinv  # P_p * H' * inv(S)
-    m_f = m_p .+ K * (0 .- z)
-    PfL = PpL - K*PpL[I1, :]  # P_f = P_p - K*S*K'
-    P_f = SquarerootMatrix(PfL)
+    mul!(K_tmp, (@view PpL[I1, :])', Sinv)
+    mul!(K_tmp2, PpL, K_tmp)
+    K = K_tmp2
+    m_f = m_tmp2
+    mul!(m_f, K, z_neg)
+    m_f .+= m_p
+
+    mul!(cov_tmp, K, @view PpL[I1, :])
+    cov_tmp .= PpL .- cov_tmp
+    P_f = SquarerootMatrix(cov_tmp)
 
     x_filt = Gaussian(m_f, P_f)
-    integ.u = m_f[I0]
+    copy!(integ.u, @view m_f[I0])
 
     # Estimate error for adaptive steps
     if integ.opts.adaptive
 
-        err_est_unscaled = sqrt.(σ².*diag(HQH))
+        err_tmp .= sqrt.(σ².*diag(HQH))
 
-        err = DiffEqBase.calculate_residuals(
-            dt * err_est_unscaled, integ.u, integ.uprev,
+        DiffEqBase.calculate_residuals!(
+            tmp, dt * err_tmp, integ.u, integ.uprev,
             integ.opts.abstol, integ.opts.reltol, integ.opts.internalnorm, t)
-        integ.EEst = integ.opts.internalnorm(err, t) # scalar
+        integ.EEst = integ.opts.internalnorm(tmp, t) # scalar
 
         if integ.EEst < one(integ.EEst)
-            integ.cache.x = x_filt
+            copy!(integ.cache.x, x_filt)
         end
     end
 end

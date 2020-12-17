@@ -1,7 +1,10 @@
 # Called in the OrdinaryDiffEQ.__init; All `OrdinaryDiffEqAlgorithm`s have one
 function OrdinaryDiffEq.initialize!(integ, cache::GaussianODEFilterCache)
+    @assert integ.opts.dense == integ.alg.smooth "`dense` and `smooth` should have the same value! "
     @assert integ.saveiter == 1
-    OrdinaryDiffEq.copyat_or_push!(integ.sol.x, integ.saveiter, cache.x)
+    if integ.opts.dense
+        OrdinaryDiffEq.copyat_or_push!(integ.sol.x, integ.saveiter, cache.x)
+    end
     OrdinaryDiffEq.copyat_or_push!(integ.sol.pu, integ.saveiter, cache.SolProj*cache.x)
 end
 
@@ -70,6 +73,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::GaussianODEFilterCache, repe
         # stuff that would normally be in apply_step!
         if integ.EEst < one(integ.EEst)
             copy!(integ.cache.x, integ.cache.x_filt)
+            integ.sol.log_likelihood += integ.cache.log_likelihood
         end
     end
 end

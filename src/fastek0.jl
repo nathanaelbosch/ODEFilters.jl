@@ -151,6 +151,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
 
         if integ.EEst < one(integ.EEst)
             integ.cache.x = x_filt
+            integ.sol.log_likelihood += integ.cache.log_likelihood
         end
     end
 end
@@ -352,6 +353,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
 
         if integ.EEst < one(integ.EEst)
             copy!(integ.cache.x, x_filt)
+            integ.sol.log_likelihood += integ.cache.log_likelihood
         end
     end
 end
@@ -359,6 +361,8 @@ end
 
 function OrdinaryDiffEq.initialize!(integ, cache::Union{FastEK0ConstantCache, FastEK0Cache})
     @assert integ.saveiter == 1
-    OrdinaryDiffEq.copyat_or_push!(integ.sol.x, integ.saveiter, cache.x)
+    if integ.opts.dense
+        OrdinaryDiffEq.copyat_or_push!(integ.sol.x, integ.saveiter, cache.x)
+    end
     OrdinaryDiffEq.copyat_or_push!(integ.sol.pu, integ.saveiter, cache.SolProj*cache.x)
 end

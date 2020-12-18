@@ -188,6 +188,7 @@ mutable struct FastEK0Cache{
     # Mutable stuff
     uType,
     mType, PType, SType, KType, PreQRType,
+    QLType
 } <: ODEFiltersCache
     # Constants
     d::Int                  # Dimension of the problem
@@ -225,6 +226,7 @@ mutable struct FastEK0Cache{
     # covmatcache::matType
     # err_tmp::uType
 
+    x_filt::xType
     m_tmp::mType
     m_tmp2::mType
     P_tmp::PType
@@ -237,6 +239,7 @@ mutable struct FastEK0Cache{
     K_tmp::KType
     K_tmp2::KType
     preQRmat::PreQRType
+    QL_tmp::QLType
 end
 function OrdinaryDiffEq.alg_cache(
     alg::FastEK0, u, rate_prototype, uEltypeNoUnits, uBottomEltypeNoUnits, tTypeNoUnits, uprev, uprev2, f, t, dt, reltol, p, calck, IIP::Val{true})
@@ -244,19 +247,20 @@ function OrdinaryDiffEq.alg_cache(
     constants = OrdinaryDiffEq.alg_cache(alg, u, rate_prototype, uEltypeNoUnits, uBottomEltypeNoUnits, tTypeNoUnits, uprev, uprev2, f, t, dt, reltol, p, calck, Val(false))
 
     @unpack d, q, x = constants
-    D = d*(q+1)
 
-    A, Q = ibm(d, q, uEltypeNoUnits)
-    Precond = preconditioner(d, q)
+    D = d*(q+1)
+    m_tmp = zeros(uEltypeNoUnits, D)
+    m_tmp2 = zeros(uEltypeNoUnits, D)
+
+    D = q+1
 
     # Create some arrays to cache into
+    d = 1
     cov = zeros(uEltypeNoUnits, D, D)
     K = zeros(uEltypeNoUnits, D, D)
     pre_QR = zeros(uEltypeNoUnits, D, 2D)
     pre_QR = zeros(uEltypeNoUnits, D, 2D)
 
-    m_tmp = zeros(uEltypeNoUnits, D)
-    m_tmp2 = zeros(uEltypeNoUnits, D)
     P_tmp = zeros(uEltypeNoUnits, D, D)
     P_tmp2 = zeros(uEltypeNoUnits, D, D)
     u_tmp = copy(u)
@@ -266,29 +270,34 @@ function OrdinaryDiffEq.alg_cache(
     S_tmp2 = zeros(uEltypeNoUnits, d, d)
     K_tmp = zeros(uEltypeNoUnits, D, d)
     K_tmp2 = zeros(uEltypeNoUnits, D, d)
-    preQRmat = zeros(uEltypeNoUnits, 2D, D)
+    preQRmat = zeros(uEltypeNoUnits, D, 2D)
+    QL_tmp = LowerTriangular(zeros(uEltypeNoUnits, D, D))
 
 
     return FastEK0Cache{
-        typeof(A), typeof(Q),
+        typeof(constants.A), typeof(constants.Q),
         typeof(constants.R), typeof(constants.Proj), typeof(constants.SolProj),
-        typeof(Precond),
+        typeof(constants.Precond),
         typeof(constants.x), typeof(constants.diffusion), typeof(constants.log_likelihood),
         typeof(constants.I0),
         # Mutable stuff
         typeof(u),
         typeof(m_tmp), typeof(P_tmp), typeof(S_tmp), typeof(K_tmp), typeof(preQRmat),
+        typeof(QL_tmp),
     }(
-        constants.d, constants.q, A, Q, constants.R, constants.Proj, constants.SolProj, Precond,
+        constants.d, constants.q, constants.A, constants.Q, constants.R, constants.Proj, constants.SolProj, constants.Precond,
         constants.x, constants.diffusion,
         constants.I0, constants.I1,
         constants.log_likelihood,
         # Mutable stuff
         copy(u), copy(u),
+        copy(constants.x),
         m_tmp, m_tmp2, P_tmp, P_tmp2, u_tmp, u_tmp2, z_tmp, S_tmp, S_tmp2,
         K_tmp, K_tmp2, preQRmat,
+        QL_tmp,
     )
 end
+
 
 function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=false)
     @unpack t, dt, f, p = integ
@@ -299,6 +308,8 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
 
     # Load pre-allocated stuff, and assign them to more meaningful variables
     @unpack tmp, m_tmp, m_tmp2, P_tmp, P_tmp2, z_tmp, u_tmp, u_tmp2, S_tmp, S_tmp2, K_tmp, K_tmp2, preQRmat = integ.cache
+    @unpack QL_tmp = integ.cache
+    @unpack x_filt = integ.cache
     err_tmp = u_tmp
     HQH = S_tmp2
     cov_tmp = P_tmp
@@ -306,64 +317,68 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     tnew = t + dt
 
     # Setup
-    T = Precond(dt); TI = inv(T)
-    Ah, QhL = TI*A*T, TI*Q.L
-    HQhL = @view QhL[I1, :]
-    mul!(HQH, HQhL, HQhL')
+    TI = Precond(dt)
+    Ah = A(dt)
+    QhL = QL_tmp
+    @. QhL = TI.diag * Q.L
+    HQhL = @view QhL[2, :]
+    HQH = HQhL'HQhL
 
     m, P = x.μ, x.Σ
-    PL = P.squareroot
+    KI = 1:d:D
+    # PL = @view P.squareroot[KI, KI]
+    PL = P.squareroot.left
 
     # Predict - Mean
-    m_p = m_tmp
-    mul!(m_p, Ah, m)
+    m_p = vec(reshape(m, (d, q+1)) * Ah')
     u_pred = @view m_p[I0]  # E0 * m_p
     du_pred = @view m_p[I1]  # E1 * m_p
 
     # Measure
     du = cache.u
     f(du, u_pred, p, tnew)
-    z = du_pred - du
     du .-= du_pred
     z_neg = du
 
     # Calibrate
-    σ² = z' * (HQH \ z) / d  # z'inv(H*Q*H')z / d
+    # σ² = z' * (HQH \ z) / d  # z'inv(H*Q*H')z / d
+    σ² = z_neg'z_neg / HQH
     cache.diffusion = σ²
 
     # Predict - Cov
-    QhL_calibrated = sqrt(σ²) * QhL
-    preQRmat[1:D, :] .= PL' * Ah'
-    preQRmat[D+1:end, :] = QhL_calibrated'
-    PpR = qr!(preQRmat).R
-    PpL = PpR'
+    preQRmat[:, 1:q+1] .= Ah*PL
+    @. preQRmat[:, q+2:end] = sqrt(σ²) * QhL
+    mul!(P_tmp2, preQRmat, preQRmat')
+    Pp = P_tmp2
+    copy!(P_tmp, Pp)
+    PpL = cholesky!(P_tmp).L
+    # If this fails, replace with
+    # PpL = qr(preQRmat').R'
 
     # Measurement Cov
-    @assert iszero(R)
-    SL = PpL[I1, :]
-    mul!(S_tmp, SL, SL')
-    S = S_tmp
+    # @assert iszero(R)
+    SL = @view PpL[2, :]
+    S = SL'SL
 
     # Update
     Sinv = inv(S)
-    mul!(K_tmp, (@view PpL[I1, :])', Sinv)
-    mul!(K_tmp2, PpL, K_tmp)
-    K = K_tmp2
-    m_f = m_tmp2
-    mul!(m_f, K, z_neg)
-    m_f .+= m_p
-
-    mul!(cov_tmp, K, @view PpL[I1, :])
-    cov_tmp .= PpL .- cov_tmp
-    P_f = SquarerootMatrix(cov_tmp)
-
+    # K = PpL * PpL[2, :] * Sinv  # P_p * H' * inv(S)
+    K = K_tmp
+    @. K = (@view Pp[:, 2]) * Sinv  # P_p * H' * inv(S)
+    # P_p * H' * inv(S)
+    m_p .+= vec(z_neg*K')
+    m_f = m_p
+    PfL = P_tmp
+    PfL .= PpL .- K*(@view PpL[2, :])'  # P_f = P_p - K*S*K'
+    P_f = SquarerootMatrix(KronMat(PfL, d))
+    # P_f = SquarerootMatrix(kron(PfL, I(d)))
     x_filt = Gaussian(m_f, P_f)
-    copy!(integ.u, @view m_f[I0])
+    integ.u .= @view m_f[I0]
 
     # Estimate error for adaptive steps
     if integ.opts.adaptive
 
-        err_tmp .= sqrt.(σ².*diag(HQH))
+        err_tmp = sqrt(σ²*HQH)
 
         DiffEqBase.calculate_residuals!(
             tmp, dt * err_tmp, integ.u, integ.uprev,
@@ -383,5 +398,6 @@ function OrdinaryDiffEq.initialize!(integ, cache::Union{FastEK0ConstantCache, Fa
     if integ.opts.dense
         OrdinaryDiffEq.copyat_or_push!(integ.sol.x, integ.saveiter, cache.x)
     end
-    OrdinaryDiffEq.copyat_or_push!(integ.sol.pu, integ.saveiter, cache.SolProj*cache.x)
+    # OrdinaryDiffEq.copyat_or_push!(integ.sol.pu, integ.saveiter, cache.SolProj*cache.x)
+    OrdinaryDiffEq.copyat_or_push!(integ.sol.pu, integ.saveiter, Gaussian(integ.u, integ.cache.x.Σ.squareroot.left[1,1]^2*I))
 end

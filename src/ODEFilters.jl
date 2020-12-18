@@ -29,6 +29,7 @@ apply_diffusion(Q, diffusion::Number) = Q*diffusion
 
 # All the Gaussian things
 @reexport using GaussianDistributions
+RecursiveArrayTools.recursivecopy(P::Gaussian) = copy(P)
 using GaussianDistributions: logpdf
 const PSDGaussian{T} = Gaussian{Vector{T}, PSDMatrix{T}}
 const PSDGaussianList{T} = StructArray{PSDGaussian{T}}

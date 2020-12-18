@@ -56,12 +56,13 @@ function DiffEqBase.build_solution(
     uEltype = eltype(prob.u0)
     cov = zeros(uEltype, d, d)
     if alg isa FastEK0
-        cov = SquarerootMatrix(cov)
+        xcov = SquarerootMatrix(KronMat(cov, d))
+        pucov = one(uEltype)*I
     else
-        cov = PSDMatrix(LowerTriangular(cov))
+        xcov = pucov = PSDMatrix(LowerTriangular(cov))
     end
-    pu = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(cov)}}(undef, 0)
-    x = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(cov)}}(undef, 0)
+    pu = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(pucov)}}(undef, 0)
+    x = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(xcov)}}(undef, 0)
 
     interp = GaussianODEFilterPosterior(alg, prob.u0)
 

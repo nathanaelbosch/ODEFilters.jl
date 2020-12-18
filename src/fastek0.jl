@@ -46,7 +46,8 @@ function OrdinaryDiffEq.alg_cache(
     t0 = t
     d = length(u)
 
-    Proj(deriv) = kron([i==(deriv+1) ? 1 : 0 for i in 1:q+1]', diagm(0 => ones(d)))
+    Proj(deriv) = KronMat(reshape([i==(deriv+1) ? 1 : 0 for i in 1:q+1], (1, q+1)), d)
+    # Proj(deriv) = kron([i==(deriv+1) ? 1 : 0 for i in 1:q+1]', diagm(0 => ones(d)))
     SolProj = Proj(0)
 
     @assert alg.prior == :ibm "Only the ibm prior is implemented so far"
@@ -67,7 +68,9 @@ function OrdinaryDiffEq.alg_cache(
     end
     # P0 = PSDMatrix(LowerTriangular(P0))
     @assert iszero(P0)
-    P0 = SquarerootMatrix(P0)
+    KI = 1:d:d*(q+1)
+    P0 = SquarerootMatrix(KronMat(P0[KI, KI], d))
+    # P0 = SquarerootMatrix(P0)
     x0 = Gaussian(m0, P0)
 
     initdiff = one(uEltypeNoUnits)
@@ -108,7 +111,8 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     HQH = HQhL'HQhL
 
     m, P = x.μ, x.Σ
-    PL = @view P.squareroot[KI, KI]
+    # PL = @view P.squareroot[KI, KI]
+    PL = P.squareroot.left
 
     # Predict - Mean
     # m_p = Ah*m
@@ -145,7 +149,8 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     K = Pp[:, 2] * Sinv  # P_p * H' * inv(S)
     m_f = m_p .+ vec((z_neg)*K')
     PfL = PpL - K*(@view PpL[2, :])'  # P_f = P_p - K*S*K'
-    P_f = SquarerootMatrix(kron(PfL, I(d)))
+    # P_f = SquarerootMatrix(kron(PfL, I(d)))
+    P_f = SquarerootMatrix(KronMat(PfL, d))
 
     x_filt = Gaussian(m_f, P_f)
     integ.u = m_f[I0]

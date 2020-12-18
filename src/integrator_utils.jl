@@ -43,7 +43,12 @@ function DiffEqBase.savevalues!(
         OrdinaryDiffEq.copyat_or_push!(integrator.sol.x, integrator.saveiter, integrator.cache.x)
         OrdinaryDiffEq.copyat_or_push!(integrator.sol.diffusions, integrator.saveiter, integrator.cache.diffusion)
     end
-    OrdinaryDiffEq.copyat_or_push!(integrator.sol.pu, integrator.saveiter, integrator.cache.SolProj*integrator.cache.x)
+
+    if integrator.alg isa FastEK0
+        OrdinaryDiffEq.copyat_or_push!(integrator.sol.pu, integrator.saveiter, Gaussian(integrator.u, integrator.cache.x.Σ.squareroot.left[1,1]^2*I))
+    else
+        OrdinaryDiffEq.copyat_or_push!(integrator.sol.pu, integrator.saveiter, integrator.cache.SolProj*integrator.cache.x)
+    end
 
     return out
 end

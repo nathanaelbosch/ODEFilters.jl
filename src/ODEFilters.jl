@@ -78,5 +78,6 @@ export IEKS, solve_ieks
 include("fastek0.jl")
 export FastEK0
 include("squarerootmatrix.jl")
+include("kroneckermatrix.jl")
 
 end

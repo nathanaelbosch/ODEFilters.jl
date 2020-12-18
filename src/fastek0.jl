@@ -52,11 +52,9 @@ function OrdinaryDiffEq.alg_cache(
     @assert alg.prior == :ibm "Only the ibm prior is implemented so far"
     @assert alg.diffusionmodel == :dynamic "FastEK0 only uses dynamic diffusion"
 
-    Precond = preconditioner(1, q)
+    Precond = invpreconditioner(1, q)
     _, Q = ibm(1, q, uEltypeNoUnits)
     A, _ = vanilla_ibm(1, q, uEltypeNoUnits)
-    # A, Q = vanilla_ibm(d, q, uEltypeNoUnits)
-    # Q = Matrix(Q)
     R = zeros(d, d)
 
     m0, P0 = initialize_with_derivatives(Vector(u0), f, p, t0, q)
@@ -100,7 +98,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     tnew = t + dt
 
     # Setup
-    TI = inv(Precond(dt))
+    TI = Precond(dt)
     Ah = A(dt)
     QhL = TI*Q.L
     KI = 1:d:D
@@ -131,29 +129,22 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     # Predict - Cov
     QhL_calibrated = sqrt(σ²) * QhL
     small_qr_input = [Ah*PL QhL_calibrated]'
-    _, PpR = qr(small_qr_input)
-    PpL = PpR'
-    _PpL = [Ah*PL QhL_calibrated]
-    # @info "sizes?" PpL _PpL
-    @assert PpL*PpL' ≈ _PpL*_PpL'
+    Pp = small_qr_input'small_qr_input
+    PpL = cholesky(Pp).L
+    # If this fails, replace with
+    # PpL = qr(small_qr_input).R'
 
     # Measurement Cov
-    @assert iszero(R)
+    # @assert iszero(R)
     SL = @view PpL[2, :]
     S = SL'SL
-    _SL = @view _PpL[2, :]
-    _S = _SL'_SL
-    @assert S ≈ _S
 
     # Update
     Sinv = inv(S)
-    K = PpL * PpL[2, :] * Sinv  # P_p * H' * inv(S)
-    _K = _PpL * _PpL[2, :] * inv(_S)  # P_p * H' * inv(S)
-    @assert K ≈ _K
-    m_f = m_p .+ vec((z_neg)*_K')
-    PfL = PpL - _K*PpL[2, :]'  # P_f = P_p - K*S*K'
-    @info "sizes?" PpL _PpL _K*PpL[2, :]' _K*_PpL[2, :]'
-    (t>0) && error()
+    # K = PpL * PpL[2, :] * Sinv  # P_p * H' * inv(S)
+    K = Pp[:, 2] * Sinv  # P_p * H' * inv(S)
+    m_f = m_p .+ vec((z_neg)*K')
+    PfL = PpL - K*(@view PpL[2, :])'  # P_f = P_p - K*S*K'
     P_f = SquarerootMatrix(kron(PfL, I(d)))
 
     x_filt = Gaussian(m_f, P_f)

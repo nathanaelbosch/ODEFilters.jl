@@ -103,21 +103,15 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     # Setup
     TI = Precond(dt)
     Ah = A(dt)
-    QhL = TI*Q.L
-    KI = 1:d:D
-    smallAh = Ah
-    smallQhL = QhL
-    HQhL = @view QhL[2, :]
-    HQH = HQhL'HQhL
+    HQH = TI[2,2]^2 * Q[2,2]
 
     m, P = x.μ, x.Σ
-    # PL = @view P.squareroot[KI, KI]
     PL = P.squareroot.left
 
     # Predict - Mean
     # m_p = Ah*m
-    m_p = vec(reshape(m, (d, q+1)) * smallAh')
-    # @assert m_p == m_p_tricked
+    m_p = vec(reshape(m, (d, q+1)) * Ah')
+
     u_pred = @view m_p[I0]  # E0 * m_p
     du_pred = @view m_p[I1]  # E1 * m_p
 
@@ -131,19 +125,18 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     cache.diffusion = σ²
 
     # Predict - Cov
-    QhL_calibrated = sqrt(σ²) * QhL
+    QhL_calibrated = sqrt(σ²) .* TI.diag .* Q.L
     small_qr_input = [Ah*PL QhL_calibrated]'
     Pp = small_qr_input'small_qr_input
     chol = cholesky(Pp, check=false)
-    PpL = issuccess(chol) ? chol.U' : qr(preQRmat').R'
+    PpL = issuccess(chol) ? chol.U' : qr(small_qr_input).R'
 
     # Measurement Cov
     # @assert iszero(R)
-    SL = @view PpL[2, :]
-    S = SL'SL
+    S = Pp[2,2]
 
     # Update
-    Sinv = inv(S)
+    Sinv = 1/S
     # K = PpL * PpL[2, :] * Sinv  # P_p * H' * inv(S)
     K = Pp[:, 2] * Sinv  # P_p * H' * inv(S)
     m_f = m_p .+ vec((z_neg)*K')
@@ -324,8 +317,6 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     HQH = Qh[2,2]
 
     m, P = x.μ, x.Σ
-    KI = 1:d:D
-    # PL = @view P.squareroot[KI, KI]
     PL = P.squareroot.left
 
     # Predict - Mean
@@ -377,6 +368,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     PfL .+= PpL
     P_f = SquarerootMatrix(KronMat(PfL, d))
     # P_f = SquarerootMatrix(kron(PfL, I(d)))
+
     x_filt = Gaussian(m_f, P_f)
     integ.u .= @view m_f[I0]
 

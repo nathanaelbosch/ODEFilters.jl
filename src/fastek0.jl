@@ -315,12 +315,10 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     @unpack x_filt = integ.cache
     err_tmp = u_tmp
     HQH = S_tmp2
-    cov_tmp = P_tmp
 
     tnew = t + dt
 
     # Setup
-    TI = Precond(dt)
     Ah = A(dt)
     Qh = Q(dt)
     HQH = Qh[2,2]
@@ -350,29 +348,33 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
 
     # Predict - Cov
     mul!(P_tmp2, Ah, PL)
-    preQRmat[:, 1:q+1] .= P_tmp2
-    @. preQRmat[:, q+2:end] = sqrt(σ²) * TI.diag * QL
-    mul!(P_tmp2, preQRmat, preQRmat')
-    Pp = P_tmp2
-    copy!(P_tmp, Pp)
-    chol = cholesky!(P_tmp, check=false)
-    PpL = issuccess(chol) ? chol.U' : qr(preQRmat').R'
+    mul!(P_tmp, P_tmp2, P_tmp2')
+    @. P_tmp += σ²*Qh
+    Pp = P_tmp
+    chol = cholesky(Symmetric(P_tmp), check=false)
+    PpL = chol.U'
+    if !issuccess(chol)
+        preQRmat[:, 1:q+1] .= P_tmp2
+        TI = Precond(dt)
+        @. preQRmat[:, q+2:end] = sqrt(σ²) * TI.diag * QL
+        PpL = qr(preQRmat').R'
+    end
 
     # Measurement Cov
     # @assert iszero(R)
-    SL = @view PpL[2, :]
-    S = SL'SL
+    S = Pp[2,2]
 
     # Update
-    Sinv = inv(S)
+    Sinv_neg = -1/S
     # K = PpL * PpL[2, :] * Sinv  # P_p * H' * inv(S)
-    K = K_tmp
-    @. K = (@view Pp[:, 2]) * Sinv  # P_p * H' * inv(S)
-    # P_p * H' * inv(S)
-    m_p .+= kron(K, z_neg)  # == vec(z_neg*K')
-    m_f = m_p
-    PfL = P_tmp
-    PfL .= PpL .- K*(@view PpL[2, :])'  # P_f = P_p - K*S*K'
+    K_neg = K_tmp
+    @. K_neg = (@view Pp[:, 2]) * Sinv_neg  # P_p * H' * inv(S)
+    # The following computes m_tmp such that: @assert m_tmp ≈ kron(K_neg, z_neg)
+    for i in 1:q+1 @. m_tmp[(i-1)*d+1:i*d] = K_neg[i]*z_neg end
+    m_f = m_p .-= m_tmp
+    PfL = P_tmp  # => Pp will be overwritten now
+    mul!(PfL, K_neg, PpL[2, :]')  # P_f = P_p - K*S*K'
+    PfL .+= PpL
     P_f = SquarerootMatrix(KronMat(PfL, d))
     # P_f = SquarerootMatrix(kron(PfL, I(d)))
     x_filt = Gaussian(m_f, P_f)

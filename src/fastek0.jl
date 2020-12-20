@@ -134,9 +134,8 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     QhL_calibrated = sqrt(σ²) * QhL
     small_qr_input = [Ah*PL QhL_calibrated]'
     Pp = small_qr_input'small_qr_input
-    PpL = cholesky(Pp).L
-    # If this fails, replace with
-    # PpL = qr(small_qr_input).R'
+    chol = cholesky(Pp, check=false)
+    PpL = issuccess(chol) ? chol.U' : qr(preQRmat').R'
 
     # Measurement Cov
     # @assert iszero(R)
@@ -268,14 +267,17 @@ function OrdinaryDiffEq.alg_cache(
     z_tmp = copy(u)
     S_tmp = zeros(uEltypeNoUnits, d, d)
     S_tmp2 = zeros(uEltypeNoUnits, d, d)
-    K_tmp = zeros(uEltypeNoUnits, D, d)
-    K_tmp2 = zeros(uEltypeNoUnits, D, d)
+    K_tmp = zeros(uEltypeNoUnits, D)
+    K_tmp2 = zeros(uEltypeNoUnits, D)
     preQRmat = zeros(uEltypeNoUnits, D, 2D)
-    QL_tmp = LowerTriangular(zeros(uEltypeNoUnits, D, D))
+
+    _, Q = ibm(1, q, uEltypeNoUnits)
+    QL_tmp = Q.L
+    A, Q = vanilla_ibm(1, q, uEltypeNoUnits)
 
 
     return FastEK0Cache{
-        typeof(constants.A), typeof(constants.Q),
+        typeof(constants.A), typeof(Q),
         typeof(constants.R), typeof(constants.Proj), typeof(constants.SolProj),
         typeof(constants.Precond),
         typeof(constants.x), typeof(constants.diffusion), typeof(constants.log_likelihood),
@@ -285,7 +287,7 @@ function OrdinaryDiffEq.alg_cache(
         typeof(m_tmp), typeof(P_tmp), typeof(S_tmp), typeof(K_tmp), typeof(preQRmat),
         typeof(QL_tmp),
     }(
-        constants.d, constants.q, constants.A, constants.Q, constants.R, constants.Proj, constants.SolProj, constants.Precond,
+        constants.d, constants.q, constants.A, Q, constants.R, constants.Proj, constants.SolProj, constants.Precond,
         constants.x, constants.diffusion,
         constants.I0, constants.I1,
         constants.log_likelihood,
@@ -309,6 +311,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     # Load pre-allocated stuff, and assign them to more meaningful variables
     @unpack tmp, m_tmp, m_tmp2, P_tmp, P_tmp2, z_tmp, u_tmp, u_tmp2, S_tmp, S_tmp2, K_tmp, K_tmp2, preQRmat = integ.cache
     @unpack QL_tmp = integ.cache
+    QL = QL_tmp
     @unpack x_filt = integ.cache
     err_tmp = u_tmp
     HQH = S_tmp2
@@ -319,10 +322,8 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     # Setup
     TI = Precond(dt)
     Ah = A(dt)
-    QhL = QL_tmp
-    @. QhL = TI.diag * Q.L
-    HQhL = @view QhL[2, :]
-    HQH = HQhL'HQhL
+    Qh = Q(dt)
+    HQH = Qh[2,2]
 
     m, P = x.μ, x.Σ
     KI = 1:d:D
@@ -330,7 +331,9 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     PL = P.squareroot.left
 
     # Predict - Mean
+    # TODO This is comparatively slow and allocates!
     m_p = vec(reshape(m, (d, q+1)) * Ah')
+
     u_pred = @view m_p[I0]  # E0 * m_p
     du_pred = @view m_p[I1]  # E1 * m_p
 
@@ -346,14 +349,14 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     cache.diffusion = σ²
 
     # Predict - Cov
-    preQRmat[:, 1:q+1] .= Ah*PL
-    @. preQRmat[:, q+2:end] = sqrt(σ²) * QhL
+    mul!(P_tmp2, Ah, PL)
+    preQRmat[:, 1:q+1] .= P_tmp2
+    @. preQRmat[:, q+2:end] = sqrt(σ²) * TI.diag * QL
     mul!(P_tmp2, preQRmat, preQRmat')
     Pp = P_tmp2
     copy!(P_tmp, Pp)
-    PpL = cholesky!(P_tmp).L
-    # If this fails, replace with
-    # PpL = qr(preQRmat').R'
+    chol = cholesky!(P_tmp, check=false)
+    PpL = issuccess(chol) ? chol.U' : qr(preQRmat').R'
 
     # Measurement Cov
     # @assert iszero(R)
@@ -366,7 +369,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     K = K_tmp
     @. K = (@view Pp[:, 2]) * Sinv  # P_p * H' * inv(S)
     # P_p * H' * inv(S)
-    m_p .+= vec(z_neg*K')
+    m_p .+= kron(K, z_neg)  # == vec(z_neg*K')
     m_f = m_p
     PfL = P_tmp
     PfL .= PpL .- K*(@view PpL[2, :])'  # P_f = P_p - K*S*K'

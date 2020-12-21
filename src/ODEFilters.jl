@@ -26,6 +26,8 @@ X_A_Xt(A, X) = X*A*X'
 apply_diffusion(Q, diffusion::Diagonal) = X_A_Xt(Q, sqrt.(diffusion))
 apply_diffusion(Q, diffusion::Number) = Q*diffusion
 
+include("squarerootmatrix.jl")
+include("kroneckermatrix.jl")
 
 # All the Gaussian things
 @reexport using GaussianDistributions
@@ -80,7 +82,5 @@ include("fastek0.jl")
 export FastEK0
 include("fastek1.jl")
 export FastEK1
-include("squarerootmatrix.jl")
-include("kroneckermatrix.jl")
 
 end

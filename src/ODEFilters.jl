@@ -77,6 +77,8 @@ export IEKS, solve_ieks
 # FAST code
 include("fastek0.jl")
 export FastEK0
+include("fastek1.jl")
+export FastEK1
 include("squarerootmatrix.jl")
 include("kroneckermatrix.jl")
 

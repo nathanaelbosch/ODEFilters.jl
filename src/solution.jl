@@ -58,6 +58,9 @@ function DiffEqBase.build_solution(
     if alg isa FastEK0
         xcov = SquarerootMatrix(KronMat(cov, d))
         pucov = one(uEltype)*I
+    elseif alg isa FastEK1
+        xcov = SquarerootMatrix(cov)
+        pucov = xcov
     else
         xcov = pucov = PSDMatrix(LowerTriangular(cov))
     end

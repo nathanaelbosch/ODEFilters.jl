@@ -156,11 +156,10 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
             dt * err_est_unscaled, integ.u, integ.uprev,
             integ.opts.abstol, integ.opts.reltol, integ.opts.internalnorm, t)
         integ.EEst = integ.opts.internalnorm(err, t) # scalar
-
-        if integ.EEst < one(integ.EEst)
-            integ.cache.x = x_filt
-            integ.sol.log_likelihood += integ.cache.log_likelihood
-        end
+    end
+    if !integ.opts.adaptive || integ.EEst < one(integ.EEst)
+        integ.cache.x = x_filt
+        integ.sol.log_likelihood += integ.cache.log_likelihood
     end
 end
 

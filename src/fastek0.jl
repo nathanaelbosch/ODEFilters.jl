@@ -22,15 +22,8 @@ end
 
 
 mutable struct FastEK0ConstantCache{
-    AType, QType,
-    RType,
-    ProjType,
-    SolProjType,
-    FP,
-    xType,
-    diffusionType,
-    llType,
-    IType,
+    AType, QType, RType, ProjType, SolProjType, FP, xType, diffusionType,
+    llType, IType,
 } <: ODEFiltersCache
     # Constants
     d::Int                  # Dimension of the problem
@@ -159,19 +152,10 @@ end
 #################################################################################
 # IIP definition with pre-allocation and everything!
 mutable struct FastEK0Cache{
-    AType, QType,
-    RType,
-    ProjType,
-    SolProjType,
-    FP,
-    xType,
-    diffusionType,
-    llType,
-    IType,
+    AType, QType, RType, ProjType, SolProjType, FP, xType, diffusionType,
+    llType, IType,
     # Mutable stuff
-    uType,
-    mType, PType, SType, KType, PreQRType,
-    QLType
+    uType, mType, PType, KType, PreQRType, QLType
 } <: ODEFiltersCache
     # Constants
     d::Int                  # Dimension of the problem
@@ -191,36 +175,14 @@ mutable struct FastEK0Cache{
     I1::IType
     # Nice to have
     log_likelihood::llType
+
     # Stuff to pre-allocate
     u::uType
-    # u_pred::uType
-    # u_filt::uType
     tmp::uType
-    # x_pred::xType
-    # x_filt::xType
-    # x_tmp::xType
-    # x_tmp2::xType
-    # measurement::measType
-    # H::matType
-    # du::uType
-    # ddu::matType
-    # K::matType
-    # G::matType
-    # covmatcache::matType
-    # err_tmp::uType
-
-    x_filt::xType
     m_tmp::mType
-    m_tmp2::mType
     P_tmp::PType
     P_tmp2::PType
-    u_tmp::uType
-    u_tmp2::uType
-    z_tmp::uType
-    S_tmp::SType
-    S_tmp2::SType
     K_tmp::KType
-    K_tmp2::KType
     preQRmat::PreQRType
     QL_tmp::QLType
 end
@@ -233,54 +195,28 @@ function OrdinaryDiffEq.alg_cache(
 
     D = d*(q+1)
     m_tmp = zeros(uEltypeNoUnits, D)
-    m_tmp2 = zeros(uEltypeNoUnits, D)
 
-    D = q+1
+    D = q+1  # We live in kronecker world!
 
     # Create some arrays to cache into
-    d = 1
-    cov = zeros(uEltypeNoUnits, D, D)
-    K = zeros(uEltypeNoUnits, D, D)
-    pre_QR = zeros(uEltypeNoUnits, D, 2D)
-    pre_QR = zeros(uEltypeNoUnits, D, 2D)
-
     P_tmp = zeros(uEltypeNoUnits, D, D)
     P_tmp2 = zeros(uEltypeNoUnits, D, D)
-    u_tmp = copy(u)
-    u_tmp2 = copy(u)
-    z_tmp = copy(u)
-    S_tmp = zeros(uEltypeNoUnits, d, d)
-    S_tmp2 = zeros(uEltypeNoUnits, d, d)
     K_tmp = zeros(uEltypeNoUnits, D)
-    K_tmp2 = zeros(uEltypeNoUnits, D)
     preQRmat = zeros(uEltypeNoUnits, D, 2D)
 
-    _, Q = ibm(1, q, uEltypeNoUnits)
-    QL_tmp = Q.L
+    _, QL = ibm(1, q, uEltypeNoUnits)
+    QL_tmp = QL.L
     A, Q = vanilla_ibm(1, q, uEltypeNoUnits)
 
 
-    return FastEK0Cache{
-        typeof(constants.A), typeof(Q),
-        typeof(constants.R), typeof(constants.Proj), typeof(constants.SolProj),
-        typeof(constants.Precond),
-        typeof(constants.x), typeof(constants.diffusion), typeof(constants.log_likelihood),
-        typeof(constants.I0),
-        # Mutable stuff
-        typeof(u),
-        typeof(m_tmp), typeof(P_tmp), typeof(S_tmp), typeof(K_tmp), typeof(preQRmat),
-        typeof(QL_tmp),
-    }(
-        constants.d, constants.q, constants.A, Q, constants.R, constants.Proj, constants.SolProj, constants.Precond,
-        constants.x, constants.diffusion,
-        constants.I0, constants.I1,
-        constants.log_likelihood,
+    return FastEK0Cache(
+        constants.d, constants.q, constants.A, Q, constants.R, constants.Proj,
+        constants.SolProj, constants.Precond, constants.x, constants.diffusion,
+        constants.I0, constants.I1, constants.log_likelihood,
         # Mutable stuff
         copy(u), copy(u),
-        copy(constants.x),
-        m_tmp, m_tmp2, P_tmp, P_tmp2, u_tmp, u_tmp2, z_tmp, S_tmp, S_tmp2,
-        K_tmp, K_tmp2, preQRmat,
-        QL_tmp,
+        m_tmp, P_tmp, P_tmp2,
+        K_tmp, preQRmat, QL_tmp,
     )
 end
 
@@ -290,15 +226,10 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     @unpack d, q, Proj, SolProj, Precond, I0, I1 = integ.cache
     @unpack x, A, Q, R = integ.cache
 
-    D = d*(q+1)
-
     # Load pre-allocated stuff, and assign them to more meaningful variables
-    @unpack tmp, m_tmp, m_tmp2, P_tmp, P_tmp2, z_tmp, u_tmp, u_tmp2, S_tmp, S_tmp2, K_tmp, K_tmp2, preQRmat = integ.cache
+    @unpack tmp, m_tmp, P_tmp, P_tmp2, K_tmp, preQRmat = integ.cache
     @unpack QL_tmp = integ.cache
     QL = QL_tmp
-    @unpack x_filt = integ.cache
-    err_tmp = u_tmp
-    HQH = S_tmp2
 
     tnew = t + dt
 
@@ -324,7 +255,6 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     z_neg = du
 
     # Calibrate
-    # σ² = z' * (HQH \ z) / d  # z'inv(H*Q*H')z / d
     σ² = z_neg'z_neg / HQH
     cache.diffusion = σ²
 
@@ -343,14 +273,12 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     end
 
     # Measurement Cov
-    # @assert iszero(R)
+    @assert iszero(R)
     S = Pp[2,2]
 
     # Update
-    Sinv_neg = -1/S
-    # K = PpL * PpL[2, :] * Sinv  # P_p * H' * inv(S)
     K_neg = K_tmp
-    @. K_neg = (@view Pp[:, 2]) * Sinv_neg  # P_p * H' * inv(S)
+    @. K_neg = (@view Pp[:, 2]) / -S  # P_p * H' * inv(S)
     # The following computes m_tmp such that: @assert m_tmp ≈ kron(K_neg, z_neg)
     for i in 1:q+1 @. m_tmp[(i-1)*d+1:i*d] = K_neg[i]*z_neg end
     m_f = m_p .-= m_tmp
@@ -358,7 +286,6 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     mul!(PfL, K_neg, PpL[2, :]')  # P_f = P_p - K*S*K'
     PfL .+= PpL
     P_f = SquarerootMatrix(KronMat(PfL, d))
-    # P_f = SquarerootMatrix(kron(PfL, I(d)))
 
     x_filt = Gaussian(m_f, P_f)
     integ.u .= @view m_f[I0]

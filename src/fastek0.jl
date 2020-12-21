@@ -93,66 +93,61 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     @unpack t, dt, f, p = integ
     @unpack d, q, Proj, SolProj, Precond, I0, I1 = integ.cache
     @unpack x, A, Q, R = integ.cache
-    D = d*(q+1)
 
     tnew = t + dt
 
     # Setup
-    TI = Precond(dt)
+    Tinv = Precond(dt)
     Ah = A(dt)
-    HQH = TI[2,2]^2 * Q[2,2]
+    HQH = Tinv[2,2]^2 * Q[2,2]
 
     m, P = x.μ, x.Σ
     PL = P.squareroot.left
 
     # Predict - Mean
-    # m_p = Ah*m
-    m_p = vec(reshape(m, (d, q+1)) * Ah')
+    mp = vec(reshape(m, (d, q+1)) * Ah')  # m_p = Ah*m
 
-    u_pred = @view m_p[I0]  # E0 * m_p
-    du_pred = @view m_p[I1]  # E1 * m_p
+    u_pred = @view mp[I0]  # E0 * m_p
+    du_pred = @view mp[I1]  # E1 * m_p
 
     # Measure
     du = f(u_pred, p, tnew)
-    z_neg = du - du_pred
+    z_neg = du - du_pred  # having the negative saves an allocation later
 
     # Calibrate
     # σ² = z' * (HQH \ z) / d  # z'inv(H*Q*H')z / d
-    σ² = z_neg'z_neg / HQH
+    σ² = z_neg'z_neg / HQH  # = z' * (HQH \ z) / d
     cache.diffusion = σ²
 
     # Predict - Cov
-    QhL_calibrated = sqrt(σ²) .* TI.diag .* Q.L
+    QhL_calibrated = sqrt(σ²) .* Tinv.diag .* Q.L
     small_qr_input = [Ah*PL QhL_calibrated]'
     Pp = small_qr_input'small_qr_input
     chol = cholesky(Pp, check=false)
-    PpL = issuccess(chol) ? chol.U' : qr(small_qr_input).R'
+    PpL = issuccess(chol) ? chol.U' : qr(small_qr_input).R'  # only use QR if necessary
 
     # Measurement Cov
-    # @assert iszero(R)
-    S = Pp[2,2]
+    @assert iszero(R)
+    S = Pp[2,2]  # = H*Pp*H'
 
     # Update
-    Sinv = 1/S
-    # K = PpL * PpL[2, :] * Sinv  # P_p * H' * inv(S)
-    K = Pp[:, 2] * Sinv  # P_p * H' * inv(S)
-    m_f = m_p .+ vec((z_neg)*K')
-    PfL = PpL - K*(@view PpL[2, :])'  # P_f = P_p - K*S*K'
-    # P_f = SquarerootMatrix(kron(PfL, I(d)))
-    P_f = SquarerootMatrix(KronMat(PfL, d))
+    K = Pp[:, 2] / S  # = Pp * H' * inv(S)
+    mf = mp .+ vec((z_neg)*K')  # = mp + K*(0-z)
+    PfL = PpL - K*(@view PpL[2, :])'  # = Pp - K*S*K'
+    Pf = SquarerootMatrix(KronMat(PfL, d))
 
-    x_filt = Gaussian(m_f, P_f)
-    integ.u = m_f[I0]
+    x_filt = Gaussian(mf, Pf)
+    integ.u = mf[I0]
 
     # Estimate error for adaptive steps
     if integ.opts.adaptive
 
-        err_est_unscaled = sqrt(σ²*HQH)
+        err_est_unscaled = sqrt(σ²*HQH)  # = .√diag(σ²*HQH')
 
         err = DiffEqBase.calculate_residuals(
             dt * err_est_unscaled, integ.u, integ.uprev,
             integ.opts.abstol, integ.opts.reltol, integ.opts.internalnorm, t)
-        integ.EEst = integ.opts.internalnorm(err, t) # scalar
+        integ.EEst = integ.opts.internalnorm(err, t)
     end
     if !integ.opts.adaptive || integ.EEst < one(integ.EEst)
         integ.cache.x = x_filt

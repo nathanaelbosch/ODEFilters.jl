@@ -391,10 +391,12 @@ end
 
 
 function OrdinaryDiffEq.initialize!(integ, cache::Union{FastEK0ConstantCache, FastEK0Cache})
+    # @assert integ.opts.dense == integ.alg.smooth "`dense` and `smooth` should have the same value! "
     @assert integ.saveiter == 1
     if integ.opts.dense
         OrdinaryDiffEq.copyat_or_push!(integ.sol.x, integ.saveiter, cache.x)
     end
     # OrdinaryDiffEq.copyat_or_push!(integ.sol.pu, integ.saveiter, cache.SolProj*cache.x)
-    OrdinaryDiffEq.copyat_or_push!(integ.sol.pu, integ.saveiter, Gaussian(integ.u, integ.cache.x.Σ.squareroot.left[1,1]^2*I))
+    d = integ.cache.d
+    OrdinaryDiffEq.copyat_or_push!(integ.sol.pu, integ.saveiter, Gaussian(integ.u, integ.cache.x.Σ.squareroot.left[1,1]^2*I(d)))
 end

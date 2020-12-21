@@ -3,7 +3,7 @@
 ########################################################################################
 abstract type AbstractProbODESolution{T,N,S} <: DiffEqBase.AbstractODESolution{T,N,S} end
 mutable struct ProbODESolution{
-    T, N, uType, puType, uType2, DType, tType, rateType, xType, diffType, llType, P, A, IType, DE
+    T, N, uType, puType, uType2, DType, tType, rateType, xType, xpType, diffType, llType, P, A, IType, DE
 } <: AbstractProbODESolution{T,N,uType}
     u::uType
     pu::puType
@@ -12,6 +12,7 @@ mutable struct ProbODESolution{
     t::tType
     k::rateType
     x::xType
+    x_preds::xpType
     diffusions::diffType
     log_likelihood::llType
     prob::P
@@ -23,17 +24,17 @@ mutable struct ProbODESolution{
     retcode::Symbol
 end
 ProbODESolution{T, N}(
-    u, pu, u_analytic, errors, t, k, x, diffusions, log_likelihood, prob, alg, interp,
+    u, pu, u_analytic, errors, t, k, x, x_preds, diffusions, log_likelihood, prob, alg, interp,
     dense, tslocation, destats, retcode) where {T, N} =
         ProbODESolution{
             T, N, typeof(u), typeof(pu), typeof(u_analytic), typeof(errors), typeof(t),
-            typeof(k), typeof(x), typeof(diffusions), typeof(log_likelihood), typeof(prob),
+            typeof(k), typeof(x), typeof(x_preds), typeof(diffusions), typeof(log_likelihood), typeof(prob),
             typeof(alg), typeof(interp), typeof(destats)}(
-                u, pu, u_analytic, errors, t, k, x, diffusions, log_likelihood, prob, alg,
+                u, pu, u_analytic, errors, t, k, x, x_preds, diffusions, log_likelihood, prob, alg,
                 interp, dense, tslocation, destats, retcode)
 
 function DiffEqBase.solution_new_retcode(sol::ProbODESolution{T,N}, retcode) where {T,N}
-    ProbODESolution{T, N}(sol.u, sol.pu, sol.u_analytic, sol.errors, sol.t, sol.k, sol.x,
+    ProbODESolution{T, N}(sol.u, sol.pu, sol.u_analytic, sol.errors, sol.t, sol.k, sol.x, sol.x_preds,
                           sol.diffusions, sol.log_likelihood, sol.prob, sol.alg, sol.interp,
                           sol.dense, sol.tslocation, sol.destats, retcode)
 end
@@ -57,6 +58,7 @@ function DiffEqBase.build_solution(
     cov = zeros(uEltype, d, d)
     if alg isa FastEK0
         xcov = SquarerootMatrix(KronMat(cov, d))
+        xpredcov = SquarerootMatrix(KronMat(UpperTriangular(cov)', d))
         pucov = one(uEltype)*I(d)
     elseif alg isa FastEK1
         xcov = SquarerootMatrix(cov)
@@ -66,6 +68,7 @@ function DiffEqBase.build_solution(
     end
     pu = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(pucov)}}(undef, 0)
     x = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(xcov)}}(undef, 0)
+    x_preds = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(xpredcov)}}(undef, 0)
 
     interp = GaussianODEFilterPosterior(alg, prob.u0)
 
@@ -79,14 +82,14 @@ function DiffEqBase.build_solution(
 
     ll = zero(uEltype)
     return ProbODESolution{T, N}(
-        u, pu, u_analytic, errors, t, [], x, [], ll, prob, alg, interp, dense, 0, destats, retcode,
+        u, pu, u_analytic, errors, t, [], x, x_preds, [], ll, prob, alg, interp, dense, 0, destats, retcode,
     )
 end
 
 
 function DiffEqBase.build_solution(sol::ProbODESolution{T,N}, u_analytic, errors) where {T,N}
     return ProbODESolution{T, N}(
-        sol.u, sol.pu, u_analytic, errors, sol.t, sol.k, sol.x, sol.diffusions,
+        sol.u, sol.pu, u_analytic, errors, sol.t, sol.k, sol.x, sol.x_preds, sol.diffusions,
         sol.log_likelihood, sol.prob,
         sol.alg, sol.interp, sol.dense, sol.tslocation, sol.destats, sol.retcode,
     )

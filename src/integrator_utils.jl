@@ -39,6 +39,7 @@ function DiffEqBase.savevalues!(
     # Save our custom stuff that we need for the posterior
     if integrator.opts.dense
         OrdinaryDiffEq.copyat_or_push!(integrator.sol.x, integrator.saveiter, integrator.cache.x)
+        OrdinaryDiffEq.copyat_or_push!(integrator.sol.x_preds, integrator.saveiter, integrator.cache.x_pred)
         OrdinaryDiffEq.copyat_or_push!(integrator.sol.diffusions, integrator.saveiter, integrator.cache.diffusion)
     end
 

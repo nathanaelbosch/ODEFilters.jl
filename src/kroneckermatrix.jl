@@ -27,7 +27,7 @@ Base.getindex(K::KronMat, I::Vararg{Int, N}) where {N} =
         @warn "called getindex on KronMat!";
         getindex(Matrix(K), I...))
 Base.copy(K::KronMat{T, L, R}) where {T, L, R} =
-    KronMat{T, L, R}(copy(K.left), K.rightd)
+    KronMat{T, L, R}(K.left isa LinearAlgebra.Adjoint ? copy(K.left')' : copy(K.left), K.rightd)
 Base.copy!(dst::KronMat, src::KronMat) =
     (@assert dst.rightd == src.rightd; Base.copy!(dst.left, src.left); nothing)
 

@@ -23,7 +23,7 @@ end
 
 mutable struct FastEK0ConstantCache{
     AType, QType, RType, ProjType, SolProjType, FP, xType, diffusionType,
-    llType, IType,
+    llType, IType, xpType
 } <: ODEFiltersCache
     # Constants
     d::Int                  # Dimension of the problem
@@ -43,6 +43,7 @@ mutable struct FastEK0ConstantCache{
     I1::IType
     # Nice to have
     log_likelihood::llType
+    x_pred::xpType
 end
 
 
@@ -71,14 +72,16 @@ function OrdinaryDiffEq.alg_cache(
     m0, P0 = initialize_with_derivatives(Vector(u0), f, p, t0, q)
     @assert iszero(P0)
     # Exploit the EK0's Kronecker structure
-    P0 = SquarerootMatrix(KronMat(P0[1:d:d*(q+1), 1:d:d*(q+1)], d))
-    x0 = Gaussian(m0, P0)
+    x0 = Gaussian(m0, SquarerootMatrix(KronMat(P0[1:d:d*(q+1), 1:d:d*(q+1)], d)))
+    # Predictions always use adjoints of upper triangular matrices
+    xpred = Gaussian(copy(m0), SquarerootMatrix(KronMat(
+        UpperTriangular(P0[1:d:d*(q+1), 1:d:d*(q+1)])', d)))
 
     initdiff = one(uEltypeNoUnits)  # "dynamic diffusion" is a hard choice here
     ll = zero(uEltypeNoUnits)
 
     return FastEK0ConstantCache(
-        d, q, A, Q, R, Proj, SolProj, Precond, x0, initdiff, I0, I1, ll)
+        d, q, A, Q, R, Proj, SolProj, Precond, x0, initdiff, I0, I1, ll, xpred)
 end
 
 
@@ -118,6 +121,8 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
     Pp = small_qr_input'small_qr_input
     chol = cholesky(Pp, check=false)
     PpL = issuccess(chol) ? chol.U' : qr(small_qr_input).R'  # only use QR if necessary
+    x_pred = Gaussian(mp, SquarerootMatrix(KronMat(PpL, d)))
+    integ.cache.x_pred = x_pred
 
     # Measurement Cov
     @assert iszero(R)
@@ -153,7 +158,7 @@ end
 # IIP definition with pre-allocation and everything!
 mutable struct FastEK0Cache{
     AType, QType, RType, ProjType, SolProjType, FP, xType, diffusionType,
-    llType, IType,
+    llType, IType, xpType,
     # Mutable stuff
     uType, mType, PType, KType, PreQRType, QLType
 } <: ODEFiltersCache
@@ -175,6 +180,7 @@ mutable struct FastEK0Cache{
     I1::IType
     # Nice to have
     log_likelihood::llType
+    x_pred::xpType
 
     # Stuff to pre-allocate
     u::uType
@@ -212,7 +218,7 @@ function OrdinaryDiffEq.alg_cache(
     return FastEK0Cache(
         constants.d, constants.q, constants.A, Q, constants.R, constants.Proj,
         constants.SolProj, constants.Precond, constants.x, constants.diffusion,
-        constants.I0, constants.I1, constants.log_likelihood,
+        constants.I0, constants.I1, constants.log_likelihood, constants.x_pred,
         # Mutable stuff
         copy(u), copy(u),
         m_tmp, P_tmp, P_tmp2,
@@ -271,6 +277,8 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
         @. preQRmat[:, q+2:end] = sqrt(σ²) * TI.diag * QL
         PpL = qr(preQRmat').R'
     end
+    copy!(integ.cache.x_pred.μ, m_p)
+    copy!(integ.cache.x_pred.Σ.squareroot.left, PpL)
 
     # Measurement Cov
     @assert iszero(R)
@@ -339,8 +347,76 @@ function OrdinaryDiffEq.postamble!(integ::OrdinaryDiffEq.ODEIntegrator{<:FastEK0
 end
 
 function smooth_all!(integ, cache::FastEK0ConstantCache)
-    @info "smoothing not yet implemented for the OOP FastEK0"
+    @unpack x, x_preds, t, diffusions = integ.sol
+    @unpack A, Q, Precond, d, q = integ.cache
+    # x_pred is just used as a cache here
+    # @warn "the smoothing does not use the preconditioning yet (since it seems to work fine?)"
+
+    for i in length(x)-1:-1:2
+        dt = t[i+1] - t[i]
+        # The "current" state that we want to smooth: x[i]
+        # The "next" state, that is assumed to be smoothed: x[i+1]
+        # The estimated diffusion for this interval diffusions[i]
+
+        Ah = A(dt)
+        Tinv = Precond(dt)
+        m, P = x[i].μ, x[i].Σ
+
+        PL = P.squareroot.left
+        ms, Ps = x[i+1].μ, x[i+1].Σ
+        PsL = Ps.squareroot.left
+        mp, Pp = x_preds[i].μ, x_preds[i].Σ  # x_preds is 1 shorter
+        PpL = Pp.squareroot.left
+        σ² = diffusions[i]
+
+        PpLinv = inv(PpL)
+        Ppinv = PpLinv'PpLinv
+        G = PL*(PL' * (Ah' * Ppinv))
+        # mnew = m + vec(reshape((ms - mp), (d, q+1)) * G')
+        m .+= vec(reshape((ms - mp), (d, q+1)) * G')
+
+        # Joseph-Form:
+        # PnewL = PL - G*(PsL-PpL)
+        PL .-= G*(PsL.-PpL)
+        mnew, PnewL = m, PL
+        Pnew = SquarerootMatrix(KronMat(PnewL, d))
+        x[i] = Gaussian(mnew, Pnew)
+    end
 end
 function smooth_all!(integ, cache::FastEK0Cache)
-    @info "smoothing not yet implemented for the IIP FastEK0"
+    @unpack x, x_preds, t, diffusions = integ.sol
+    @unpack A, Q, Precond, d, q = integ.cache
+    # x_pred is just used as a cache here
+    # @warn "the smoothing does not use the preconditioning yet (since it seems to work fine?)"
+
+    for i in length(x)-1:-1:2
+        dt = t[i+1] - t[i]
+        # The "current" state that we want to smooth: x[i]
+        # The "next" state, that is assumed to be smoothed: x[i+1]
+        # The estimated diffusion for this interval diffusions[i]
+
+        Ah = A(dt)
+        Tinv = Precond(dt)
+        m, P = x[i].μ, x[i].Σ
+
+        PL = P.squareroot.left
+        ms, Ps = x[i+1].μ, x[i+1].Σ
+        PsL = Ps.squareroot.left
+        mp, Pp = x_preds[i].μ, x_preds[i].Σ  # x_preds is 1 shorter
+        PpL = Pp.squareroot.left
+        σ² = diffusions[i]
+
+        PpLinv = inv(PpL)
+        Ppinv = PpLinv'PpLinv
+        G = PL*(PL' * (Ah' * Ppinv))
+        # mnew = m + vec(reshape((ms - mp), (d, q+1)) * G')
+        m .+= vec(reshape((ms - mp), (d, q+1)) * G')
+
+        # Joseph-Form:
+        # PnewL = PL - G*(PsL-PpL)
+        PL .-= G*(PsL.-PpL)
+        mnew, PnewL = m, PL
+        Pnew = SquarerootMatrix(KronMat(PnewL, d))
+        x[i] = Gaussian(mnew, Pnew)
+    end
 end

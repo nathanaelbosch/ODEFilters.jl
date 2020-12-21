@@ -32,6 +32,7 @@ apply_diffusion(Q, diffusion::Number) = Q*diffusion
 RecursiveArrayTools.recursivecopy(P::Gaussian) = copy(P)
 using GaussianDistributions: logpdf
 const PSDGaussian{T} = Gaussian{Vector{T}, PSDMatrix{T}}
+const SMGaussian{T} = Gaussian{Vector{T}, SquarerootMatrix{T}}
 const PSDGaussianList{T} = StructArray{PSDGaussian{T}}
 copy(P::Gaussian) = Gaussian(copy(P.μ), copy(P.Σ))
 copy!(dst::Gaussian, src::Gaussian) = (copy!(dst.μ, src.μ); copy!(dst.Σ, src.Σ); nothing)
@@ -41,7 +42,7 @@ show(io::IO, ::MIME"text/plain", g::Gaussian{T, S}) where {T, S} =
 size(g::Gaussian) = size(g.μ)
 ndims(g::Gaussian) = ndims(g.μ)
 
-Base.:*(M, g::Gaussian) = Gaussian(M * g.μ, X_A_Xt(g.Σ, M))
+Base.:*(M, g::Union{PSDGaussian, SMGaussian}) = Gaussian(M * g.μ, X_A_Xt(g.Σ, M))
 GaussianDistributions.whiten(Σ::PSDMatrix, z) = Σ.L\z
 
 import Statistics: mean, var, std, cov

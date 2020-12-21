@@ -160,7 +160,7 @@ mutable struct FastEK0Cache{
     AType, QType, RType, ProjType, SolProjType, FP, xType, diffusionType,
     llType, IType, xpType,
     # Mutable stuff
-    uType, mType, PType, KType, PreQRType, QLType
+    uType, mType, PType, KType, MType, PreQRType, QLType
 } <: ODEFiltersCache
     # Constants
     d::Int                  # Dimension of the problem
@@ -188,7 +188,9 @@ mutable struct FastEK0Cache{
     m_tmp::mType
     P_tmp::PType
     P_tmp2::PType
+    P_tmp3::PType
     K_tmp::KType
+    M_tmp::MType
     preQRmat::PreQRType
     QL_tmp::QLType
 end
@@ -207,7 +209,9 @@ function OrdinaryDiffEq.alg_cache(
     # Create some arrays to cache into
     P_tmp = zeros(uEltypeNoUnits, D, D)
     P_tmp2 = zeros(uEltypeNoUnits, D, D)
+    P_tmp3 = zeros(uEltypeNoUnits, D, D)
     K_tmp = zeros(uEltypeNoUnits, D)
+    M_tmp = zeros(uEltypeNoUnits, d, q+1)  # For reshaped means
     preQRmat = zeros(uEltypeNoUnits, D, 2D)
 
     _, QL = ibm(1, q, uEltypeNoUnits)
@@ -221,8 +225,8 @@ function OrdinaryDiffEq.alg_cache(
         constants.I0, constants.I1, constants.log_likelihood, constants.x_pred,
         # Mutable stuff
         copy(u), copy(u),
-        m_tmp, P_tmp, P_tmp2,
-        K_tmp, preQRmat, QL_tmp,
+        m_tmp, P_tmp, P_tmp2, P_tmp3,
+        K_tmp, M_tmp, preQRmat, QL_tmp,
     )
 end
 
@@ -233,7 +237,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     @unpack x, A, Q, R = integ.cache
 
     # Load pre-allocated stuff, and assign them to more meaningful variables
-    @unpack tmp, m_tmp, P_tmp, P_tmp2, K_tmp, preQRmat = integ.cache
+    @unpack tmp, m_tmp, P_tmp, P_tmp2, K_tmp, M_tmp, preQRmat = integ.cache
     @unpack QL_tmp = integ.cache
     QL = QL_tmp
 
@@ -249,6 +253,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
 
     # Predict - Mean
     # TODO This is comparatively slow and allocates!
+    m_p = vec(mul!(M_tmp, reshape(m, (d, q+1)), Ah'))
     m_p = vec(reshape(m, (d, q+1)) * Ah')
 
     u_pred = @view m_p[I0]  # E0 * m_p
@@ -349,8 +354,6 @@ end
 function smooth_all!(integ, cache::FastEK0ConstantCache)
     @unpack x, x_preds, t, diffusions = integ.sol
     @unpack A, Q, Precond, d, q = integ.cache
-    # x_pred is just used as a cache here
-    # @warn "the smoothing does not use the preconditioning yet (since it seems to work fine?)"
 
     for i in length(x)-1:-1:2
         dt = t[i+1] - t[i]
@@ -386,8 +389,8 @@ end
 function smooth_all!(integ, cache::FastEK0Cache)
     @unpack x, x_preds, t, diffusions = integ.sol
     @unpack A, Q, Precond, d, q = integ.cache
-    # x_pred is just used as a cache here
-    # @warn "the smoothing does not use the preconditioning yet (since it seems to work fine?)"
+
+    @unpack P_tmp, P_tmp2, P_tmp3, m_tmp, M_tmp = integ.cache
 
     for i in length(x)-1:-1:2
         dt = t[i+1] - t[i]
@@ -395,6 +398,7 @@ function smooth_all!(integ, cache::FastEK0Cache)
         # The "next" state, that is assumed to be smoothed: x[i+1]
         # The estimated diffusion for this interval diffusions[i]
 
+        # Setup
         Ah = A(dt)
         Tinv = Precond(dt)
         m, P = x[i].μ, x[i].Σ
@@ -407,14 +411,20 @@ function smooth_all!(integ, cache::FastEK0Cache)
         σ² = diffusions[i]
 
         PpLinv = inv(PpL)
-        Ppinv = PpLinv'PpLinv
-        G = PL*(PL' * (Ah' * Ppinv))
-        # mnew = m + vec(reshape((ms - mp), (d, q+1)) * G')
-        m .+= vec(reshape((ms - mp), (d, q+1)) * G')
+        Ppinv = mul!(P_tmp, PpLinv', PpLinv)
+        G = mul!(P_tmp2, PL, mul!(P_tmp, PL', mul!(P_tmp2, Ah', Ppinv)))
+        # G = PL*(PL' * (Ah' * Ppinv))
+
+        @. m_tmp = ms - mp
+        mul!(M_tmp, reshape(m_tmp, (d, q+1)), G')
+        m .+= vec(M_tmp)
 
         # Joseph-Form:
         # PnewL = PL - G*(PsL-PpL)
-        PL .-= G*(PsL.-PpL)
+        @. P_tmp3 = PsL - PpL
+        mul!(P_tmp, G, P_tmp3)
+        PL .-= P_tmp
+        # PL .-= G*(PsL.-PpL)
         mnew, PnewL = m, PL
         Pnew = SquarerootMatrix(KronMat(PnewL, d))
         x[i] = Gaussian(mnew, Pnew)

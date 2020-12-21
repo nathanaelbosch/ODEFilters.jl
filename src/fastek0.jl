@@ -399,3 +399,29 @@ function OrdinaryDiffEq.initialize!(integ, cache::Union{FastEK0ConstantCache, Fa
     d = integ.cache.d
     OrdinaryDiffEq.copyat_or_push!(integ.sol.pu, integ.saveiter, Gaussian(integ.u, integ.cache.x.Σ.squareroot.left[1,1]^2*I(d)))
 end
+
+
+
+
+function OrdinaryDiffEq.postamble!(integ::OrdinaryDiffEq.ODEIntegrator{<:FastEK0})
+    @debug "postamble!"
+
+    if integ.alg.smooth
+        smooth_all!(integ, integ.cache)
+        d = integ.cache.d
+        for i in 1:length(integ.sol.pu)
+            integ.sol.pu[i] = Gaussian(integ.sol.x[i].μ[1:d], integ.sol.x[i].Σ.squareroot.left[1,1]^2*I(d))
+        end
+        # @assert (length(integ.sol.u) == length(integ.sol.pu))
+        # [(su .= pu) for (su, pu) in zip(integ.sol.u, integ.sol.pu.μ)]
+    end
+
+    OrdinaryDiffEq._postamble!(integ)
+end
+
+function smooth_all!(integ, cache::FastEK0ConstantCache)
+    @info "smoothing not yet implemented for the OOP FastEK0"
+end
+function smooth_all!(integ, cache::FastEK0Cache)
+    @info "smoothing not yet implemented for the IIP FastEK0"
+end

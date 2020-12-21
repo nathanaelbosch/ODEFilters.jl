@@ -15,11 +15,9 @@ h = rand()
     # the preconditioning
     d, q = 2, 2
 
-    A!, Q! = ODEFilters.vanilla_ibm(d, q)
-    Ah = diagm(0 => ones(d*(q+1)))
-    Qh = zeros(d*(q+1), d*(q+1))
-    A!(Ah, h)
-    Q!(Qh, h, σ^2)
+    A, Q = ODEFilters.vanilla_ibm(d, q)
+    Ah = A(h)
+    Qh = Q(h, σ^2)
 
 
     AH_22_IBM = [1 0 h 0 h^2/2 0;
@@ -65,10 +63,7 @@ end
     prob = prob_ode_lotkavoltera
     d = length(prob.u0)
     for q in 1:5
-        integ = init(prob, EK0(order=q, smooth=false), initialize_derivatives=false)
+        integ = init(prob, EK0(order=q), initialize_derivatives=false)
         @test length(integ.cache.x.μ) == d*(q+1)
-        sol = solve!(integ)
-        @test length(integ.cache.x.μ) == d*(q+1)
-        @test length(sol.x[end].μ) == d*(q+1)
     end
 end

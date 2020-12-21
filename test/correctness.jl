@@ -30,7 +30,7 @@ for (prob, probname) in [
 
             @debug "Testing for correctness: Constant steps" probname alg diffusion q dt
 
-            sol = solve(prob, Alg(order=q, diffusionmodel=diffusion, smooth=false),
+            sol = solve(prob, Alg(order=q, diffusionmodel=diffusion),
                         adaptive=false, dt=5e-3)
             @test sol.u ≈ true_sol.(sol.t) rtol=1e-5
             end

@@ -44,7 +44,7 @@ ndims(g::Gaussian) = ndims(g.μ)
 Base.:*(M, g::Gaussian) = Gaussian(M * g.μ, X_A_Xt(g.Σ, M))
 GaussianDistributions.whiten(Σ::PSDMatrix, z) = Σ.L\z
 
-import Statistics: mean, var, std
+import Statistics: mean, var, std, cov
 var(p::PSDGaussian{T}) where {T} = diag(p.Σ)
 std(p::PSDGaussian{T}) where {T} = sqrt.(diag(p.Σ))
 mean(s::PSDGaussianList{T}) where {T} = mean.(s)

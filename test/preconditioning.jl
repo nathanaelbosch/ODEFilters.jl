@@ -15,11 +15,9 @@ prob = ODEFilters.remake_prob_with_jac(prob)
 
     d, q = 2, 3
 
-    A!, Q! = ODEFilters.vanilla_ibm(d, q)
-    Ah = diagm(0 => ones(d*(q+1)))
-    Qh = zeros(d*(q+1), d*(q+1))
-    A!(Ah, h)
-    Q!(Qh, h, σ^2)
+    A, Q = ODEFilters.vanilla_ibm(d, q)
+    Ah = A(h)
+    Qh = Q(h, σ^2)
 
     A_p, Q_p = ODEFilters.ibm(d, q)
     Ah_p = A_p

@@ -33,8 +33,6 @@ function DiffEqBase.savevalues!(
     integrator::OrdinaryDiffEq.ODEIntegrator{<:AbstractEK},
     force_save=false, reduce_size=true)
 
-    @assert integrator.saveiter == integrator.saveiter_dense
-
     # Do whatever OrdinaryDiffEq would do
     out = OrdinaryDiffEq._savevalues!(integrator, force_save, reduce_size)
 

@@ -25,7 +25,7 @@ end
     q = 3
     dt = 1e-2
 
-    sol_nonsmooth = solve(prob, EK0(order=q, smooth=false), adaptive=false, dt=dt);
+    sol_nonsmooth = solve(prob, EK0(order=q, smooth=false), dense=false, adaptive=false, dt=dt);
     sol_smooth = solve(prob, EK0(order=q, smooth=true), adaptive=false, dt=dt);
 
     @test sol_nonsmooth.t ≈ sol_smooth.t
@@ -43,10 +43,6 @@ end
     @test 2*maximum(nonsmooth_errors) > maximum(smooth_errors)
     @test 2*sum(nonsmooth_errors) > sum(smooth_errors)
 
-    @testset "Compare smooth and non-smooth dense output" begin
-        ts = range(sol_smooth.t[1], sol_smooth.t[2], length=10)
-        smooth_dense_covs = ODEFilters.stack(diag.(sol_smooth(ts).u.Σ))
-        nonsmooth_dense_covs = ODEFilters.stack(diag.(sol_nonsmooth(ts).u.Σ))
-        @test all(smooth_dense_covs .<= nonsmooth_dense_covs)
-    end
+    # Previously we compared the smooth and non-smooth dense output, but this
+    # does not work anymore since dense output requires smoothing!
 end

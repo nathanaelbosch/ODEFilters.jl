@@ -70,11 +70,11 @@ function OrdinaryDiffEq.perform_step!(integ, cache::GaussianODEFilterCache, repe
             integ.opts.abstol, integ.opts.reltol, integ.opts.internalnorm, t)
         integ.EEst = integ.opts.internalnorm(err_tmp, t) # scalar
 
-        # stuff that would normally be in apply_step!
-        if integ.EEst < one(integ.EEst)
-            copy!(integ.cache.x, integ.cache.x_filt)
-            integ.sol.log_likelihood += integ.cache.log_likelihood
-        end
+    end
+    # stuff that would normally be in apply_step!
+    if !integ.opts.adaptive || integ.EEst < one(integ.EEst)
+        copy!(integ.cache.x, integ.cache.x_filt)
+        integ.sol.log_likelihood += integ.cache.log_likelihood
     end
 end
 

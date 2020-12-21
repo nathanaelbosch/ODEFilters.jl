@@ -1,3 +1,18 @@
+"""
+EK0 v2.0, aka. FastEK0!
+
+This file contains everything that relates to it, including notably
+- The algorithm: `FastEK0 <: AbtractEK`
+- 2 types of caches: `FastEK0ConstantCache` and `FastEK0Cache`, for OOP and IIP;
+  `FastEK0Cache` actually calls `FastEK0ConstantCache`! They might also get
+  partially merged at some point, now that the implementation seems more fixed.
+- 2 implementations of `perform_step!` (IIP and OOP)
+- an `initialize!` for both versions
+- a custom `postamble!` since some things need to be overwritten, though this
+  might be removed later
+- soon: A custom `smooth!` implementation
+"""
+
 Base.@kwdef struct FastEK0 <: AbstractEK
     prior::Symbol = :ibm
     order::Int = 1
@@ -30,7 +45,7 @@ mutable struct FastEK0ConstantCache{
     # NEEDS to be tracked
     x::xType
     diffusion::diffusionType
-    # Indices for projections
+    # Indices for projections; Faster than using `Proj`!
     I0::IType
     I1::IType
     # Nice to have
@@ -41,17 +56,19 @@ end
 function OrdinaryDiffEq.alg_cache(
     alg::FastEK0, u, rate_prototype, uEltypeNoUnits, uBottomEltypeNoUnits, tTypeNoUnits, uprev, uprev2, f, t, dt, reltol, p, calck, IIP::Val{false})
 
+    @assert alg.prior == :ibm "Only the ibm prior is implemented so far"
+    @assert alg.diffusionmodel == :dynamic "FastEK0 only uses dynamic diffusion"
+    @assert u isa AbstractVector "Only vector-valued problems are supported"
+
     q = alg.order
     u0 = u
     t0 = t
     d = length(u)
 
+    # Proj is never called right now anyways!
     Proj(deriv) = KronMat(reshape([i==(deriv+1) ? 1 : 0 for i in 1:q+1], (1, q+1)), d)
-    # Proj(deriv) = kron([i==(deriv+1) ? 1 : 0 for i in 1:q+1]', diagm(0 => ones(d)))
     SolProj = Proj(0)
-
-    @assert alg.prior == :ibm "Only the ibm prior is implemented so far"
-    @assert alg.diffusionmodel == :dynamic "FastEK0 only uses dynamic diffusion"
+    I0, I1 = 1:d, d+1:2d  # Slicing instead of projection matrices
 
     Precond = invpreconditioner(1, q)
     _, Q = ibm(1, q, uEltypeNoUnits)
@@ -59,36 +76,16 @@ function OrdinaryDiffEq.alg_cache(
     R = zeros(d, d)
 
     m0, P0 = initialize_with_derivatives(Vector(u0), f, p, t0, q)
-    if u0 isa StaticArray
-        m0 = SVector{length(m0)}(m0)
-        P0 = SMatrix{size(P0)...}(P0)
-        # A = SMatrix{size(A)...}(A)
-        # Q = SMatrix{size(Q)...}(Q)
-        R = SMatrix{size(R)...}(R)
-    end
-    # P0 = PSDMatrix(LowerTriangular(P0))
     @assert iszero(P0)
-    KI = 1:d:d*(q+1)
-    P0 = SquarerootMatrix(KronMat(P0[KI, KI], d))
-    # P0 = SquarerootMatrix(P0)
+    # Exploit the EK0's Kronecker structure
+    P0 = SquarerootMatrix(KronMat(P0[1:d:d*(q+1), 1:d:d*(q+1)], d))
     x0 = Gaussian(m0, P0)
 
-    initdiff = one(uEltypeNoUnits)
+    initdiff = one(uEltypeNoUnits)  # "dynamic diffusion" is a hard choice here
+    ll = zero(uEltypeNoUnits)
 
-    # I0, I1 = SVector{d}(1:d), SVector{d}(d+1:2d)
-    I0, I1 = 1:d, d+1:2d
-
-    return FastEK0ConstantCache{
-        typeof(A), typeof(Q),
-        typeof(R), typeof(Proj), typeof(SolProj), typeof(Precond),
-        typeof(x0), uEltypeNoUnits, uEltypeNoUnits,
-        typeof(I0)
-    }(
-        d, q, A, Q, R, Proj, SolProj, Precond,
-        x0, initdiff,
-        I0, I1,
-        zero(uEltypeNoUnits),
-    )
+    return FastEK0ConstantCache(
+        d, q, A, Q, R, Proj, SolProj, Precond, x0, initdiff, I0, I1, ll)
 end
 
 

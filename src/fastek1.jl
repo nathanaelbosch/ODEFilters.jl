@@ -143,12 +143,180 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK1ConstantCache, repeat
     if !integ.opts.adaptive || integ.EEst < one(integ.EEst)
         integ.cache.x = x_filt
         integ.sol.log_likelihood += integ.cache.log_likelihood
-
     end
 end
 
 
-function OrdinaryDiffEq.initialize!(integ, cache::Union{FastEK1ConstantCache})
+#################################################################################
+# IIP definition with pre-allocation and everything!
+mutable struct FastEK1Cache{
+    AType, QType, RType, ProjType, SolProjType, FP, xType, diffusionType,
+    llType, IType, xpType,
+    # Mutable stuff
+    uType, mType, PType, KType, MType, PreQRType, QLType
+} <: ODEFiltersCache
+    # Constants
+    d::Int                  # Dimension of the problem
+    q::Int                  # Order of the prior
+    A::AType
+    Q::QType
+    # diffusionmodel::diffModelType
+    R::RType
+    Proj::ProjType
+    SolProj::SolProjType
+    Precond::FP
+    # NEEDS to be tracked
+    x::xType
+    diffusion::diffusionType
+    # Indices for projections
+    I0::IType
+    I1::IType
+    # Nice to have
+    log_likelihood::llType
+    x_pred::xpType
+
+    # Stuff to pre-allocate
+    u::uType
+    tmp::uType
+    m_tmp::mType
+    P_tmp::PType
+    P_tmp2::PType
+    P_tmp3::PType
+    K_tmp::KType
+    M_tmp::MType
+    preQRmat::PreQRType
+    QL_tmp::QLType
+end
+function OrdinaryDiffEq.alg_cache(
+    alg::FastEK1, u, rate_prototype, uEltypeNoUnits, uBottomEltypeNoUnits, tTypeNoUnits, uprev, uprev2, f, t, dt, reltol, p, calck, IIP::Val{true})
+
+    constants = OrdinaryDiffEq.alg_cache(alg, u, rate_prototype, uEltypeNoUnits, uBottomEltypeNoUnits, tTypeNoUnits, uprev, uprev2, f, t, dt, reltol, p, calck, Val(false))
+
+    @unpack d, q, x = constants
+
+    D = d*(q+1)
+    m_tmp = zeros(uEltypeNoUnits, D)
+
+    # Create some arrays to cache into
+    P_tmp = zeros(uEltypeNoUnits, D, D)
+    P_tmp2 = zeros(uEltypeNoUnits, D, D)
+    P_tmp3 = zeros(uEltypeNoUnits, D, D)
+    K_tmp = zeros(uEltypeNoUnits, D)
+    M_tmp = zeros(uEltypeNoUnits, d, q+1)  # For reshaped means
+    preQRmat = zeros(uEltypeNoUnits, D, 2D)
+
+    _, QL = ibm(d, q, uEltypeNoUnits)
+    QL_tmp = QL.L
+    A, Q = vanilla_ibm(d, q, uEltypeNoUnits)
+
+
+    return FastEK1Cache(
+        constants.d, constants.q, constants.A, Q, constants.R, constants.Proj,
+        constants.SolProj, constants.Precond, constants.x, constants.diffusion,
+        constants.I0, constants.I1, constants.log_likelihood, constants.x_pred,
+        # Mutable stuff
+        copy(u), copy(u),
+        m_tmp, P_tmp, P_tmp2, P_tmp3,
+        K_tmp, M_tmp, preQRmat, QL_tmp,
+    )
+end
+
+
+function OrdinaryDiffEq.perform_step!(integ, cache::FastEK1Cache, repeat_step=false)
+    @unpack t, dt, f, p = integ
+    @unpack d, q, Proj, SolProj, Precond, I0, I1 = integ.cache
+    @unpack x, A, Q, R = integ.cache
+    D = d*(q+1)
+
+    # Load pre-allocated stuff, and assign them to more meaningful variables
+    @unpack tmp, m_tmp, P_tmp, P_tmp2, K_tmp, M_tmp, preQRmat = integ.cache
+    @unpack QL_tmp = integ.cache
+    QL = QL_tmp
+
+    tnew = t + dt
+
+    # Setup
+    Ah = A(dt)
+    Qh = Q(dt)
+    # HQH = Qh[2,2]
+
+    m, P = x.μ, x.Σ
+    PL = P.squareroot
+
+    # Predict - Mean
+    mp = mul!(m_tmp, Ah, m)
+
+    u_pred = @view mp[I0]  # E0 * mp
+    du_pred = @view mp[I1]  # E1 * mp
+
+    # Measure
+    du = cache.u
+    f(du, u_pred, p, tnew)
+    integ.destats.nf += 1
+    z_neg = du .-= du_pred
+
+    # Measure Jac and build H
+    ddu = zeros(d,d)
+    f.jac(ddu, u_pred, p, t)
+    integ.destats.njacs += 1
+    E0, E1 = Proj(0), Proj(1)
+    H = (E1 - ddu*E0)
+    HQH = H*Qh*H'
+
+    # Calibrate
+    σ² = z_neg' * (HQH \ z_neg) / d  # z'inv(H*Q*H')z / d
+    cache.diffusion = σ²
+
+    # Predict - Cov
+    # mul!(P_tmp2, Ah, PL)
+    # mul!(P_tmp, P_tmp2, P_tmp2')
+    # @. P_tmp += σ²*Qh
+    # Pp = P_tmp
+    Pp = Ah*PL*PL'*Ah' + σ²*Qh
+    chol = cholesky(Symmetric(Pp), check=false)
+    PpL = chol.U'
+    if !issuccess(chol)
+        preQRmat[:, 1:D] .= P_tmp2
+        Tinv = inv(Precond(dt))
+        @. preQRmat[:, D+1:end] = sqrt(σ²) * Tinv.diag * QL
+        PpL = qr(preQRmat').R'
+    end
+    copy!(integ.cache.x_pred.μ, mp)
+    copy!(integ.cache.x_pred.Σ.squareroot, PpL)
+
+    # Measurement Cov
+    @assert iszero(R)
+    S = H*Pp*H'
+
+    # Update
+    Sinv = inv(S)
+    K = Pp * H' * Sinv
+    mf = mp .+ K*z_neg
+    PfL = PpL - K*H*PpL
+    P_f = SquarerootMatrix(PfL)
+
+    x_filt = Gaussian(mf, P_f)
+    integ.u .= @view mf[I0]
+
+    # Estimate error for adaptive steps
+    if integ.opts.adaptive
+
+        err_tmp = sqrt.(σ².*diag(HQH))
+
+        DiffEqBase.calculate_residuals!(
+            tmp, dt * err_tmp, integ.u, integ.uprev,
+            integ.opts.abstol, integ.opts.reltol, integ.opts.internalnorm, t)
+        integ.EEst = integ.opts.internalnorm(tmp, t) # scalar
+
+    end
+    if !integ.opts.adaptive || integ.EEst < one(integ.EEst)
+        copy!(integ.cache.x, x_filt)
+        integ.sol.log_likelihood += integ.cache.log_likelihood
+    end
+end
+
+
+function OrdinaryDiffEq.initialize!(integ, cache::Union{FastEK1ConstantCache, FastEK1Cache})
     # @assert integ.opts.dense == integ.alg.smooth "`dense` and `smooth` should have the same value! "
     @assert integ.saveiter == 1
     if integ.opts.dense
@@ -205,6 +373,49 @@ function smooth_all!(integ, cache::FastEK1ConstantCache)
         # Joseph-Form:
         # PnewL = PL - G*(PsL-PpL)
         PL .-= G*(PsL.-PpL)
+        mnew, PnewL = m, PL
+        Pnew = SquarerootMatrix(PnewL)
+        x[i] = Gaussian(mnew, Pnew)
+    end
+end
+function smooth_all!(integ, cache::FastEK1Cache)
+    @unpack x, x_preds, t, diffusions = integ.sol
+    @unpack A, Q, Precond, d, q = integ.cache
+
+    @unpack P_tmp, P_tmp2, P_tmp3, m_tmp, M_tmp = integ.cache
+
+    for i in length(x)-1:-1:2
+        dt = t[i+1] - t[i]
+        # The "current" state that we want to smooth: x[i]
+        # The "next" state, that is assumed to be smoothed: x[i+1]
+        # The estimated diffusion for this interval diffusions[i]
+
+        # Setup
+        Ah = A(dt)
+        # Tinv = Precond(dt)
+        m, P = x[i].μ, x[i].Σ
+
+        PL = P.squareroot
+        ms, Ps = x[i+1].μ, x[i+1].Σ
+        PsL = Ps.squareroot
+        mp, Pp = x_preds[i].μ, x_preds[i].Σ  # x_preds is 1 shorter
+        PpL = Pp.squareroot
+        σ² = diffusions[i]
+
+        PpLinv = inv(PpL)
+        Ppinv = mul!(P_tmp, PpLinv', PpLinv)
+        G = mul!(P_tmp2, PL, mul!(P_tmp, PL', mul!(P_tmp2, Ah', Ppinv)))
+        # G = PL*(PL' * (Ah' * Ppinv))
+
+        @. m_tmp = ms - mp
+        m .+= G*m_tmp
+
+        # Joseph-Form:
+        # PnewL = PL - G*(PsL-PpL)
+        @. P_tmp3 = PsL - PpL
+        mul!(P_tmp, G, P_tmp3)
+        PL .-= P_tmp
+        # PL .-= G*(PsL.-PpL)
         mnew, PnewL = m, PL
         Pnew = SquarerootMatrix(PnewL)
         x[i] = Gaussian(mnew, Pnew)

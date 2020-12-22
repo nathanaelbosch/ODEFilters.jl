@@ -9,6 +9,9 @@ end
 
 @testset "ODEFilters" begin
 
+    println("FastEK0")
+    @timedtestset "FastEK0" begin include("fastek0.jl") end
+
     println("Correctness")
     @timedtestset "Correctness" begin include("correctness.jl") end
 

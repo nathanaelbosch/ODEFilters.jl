@@ -93,10 +93,12 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK1ConstantCache, repeat
 
     # Measure
     du = f(u_pred, p, tnew)
+    integ.destats.nf += 1
     z_neg = du - du_pred  # having the negative saves an allocation later
 
     # Measure Jac and build H
     ddu = f.jac(u_pred, p, t)
+    integ.destats.njacs += 1
     E0, E1 = Proj(0), Proj(1)
     H = (E1 - ddu*E0)
     HQH = H*Q*H'

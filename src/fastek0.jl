@@ -108,6 +108,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0ConstantCache, repeat
 
     # Measure
     du = f(u_pred, p, tnew)
+    integ.destats.nf += 1
     z_neg = du - du_pred  # having the negative saves an allocation later
 
     # Calibrate
@@ -262,6 +263,7 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     # Measure
     du = cache.u
     f(du, u_pred, p, tnew)
+    integ.destats.nf += 1
     du .-= du_pred
     z_neg = du
 

@@ -346,6 +346,7 @@ end
 function smooth_all!(integ, cache::FastEK1ConstantCache)
     @unpack x, x_preds, t, diffusions = integ.sol
     @unpack A, Q, Precond, d, q = integ.cache
+    @warn "The smoothing is likely to be completely wrong :("
 
     for i in length(x)-1:-1:2
         dt = t[i+1] - t[i]
@@ -383,6 +384,7 @@ function smooth_all!(integ, cache::FastEK1Cache)
     @unpack A, Q, Precond, d, q = integ.cache
 
     @unpack P_tmp, P_tmp2, P_tmp3, m_tmp, M_tmp = integ.cache
+    @warn "The smoothing is likely to be completely wrong :("
 
     for i in length(x)-1:-1:2
         dt = t[i+1] - t[i]

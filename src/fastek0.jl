@@ -362,7 +362,7 @@ function smooth_all!(integ, cache::FastEK0ConstantCache)
         # The estimated diffusion for this interval diffusions[i]
 
         Ah = A(dt)
-        Tinv = Precond(dt)
+        # Tinv = Precond(dt)
         m, P = x[i].μ, x[i].Σ
 
         PL = P.squareroot.left
@@ -400,7 +400,7 @@ function smooth_all!(integ, cache::FastEK0Cache)
 
         # Setup
         Ah = A(dt)
-        Tinv = Precond(dt)
+        # Tinv = Precond(dt)
         m, P = x[i].μ, x[i].Σ
 
         PL = P.squareroot.left

@@ -344,8 +344,8 @@ function OrdinaryDiffEq.postamble!(integ::OrdinaryDiffEq.ODEIntegrator{<:FastEK0
         for i in 1:length(integ.sol.pu)
             integ.sol.pu[i] = Gaussian(integ.sol.x[i].μ[1:d], integ.sol.x[i].Σ.squareroot.left[1,1]^2*I(d))
         end
-        # @assert (length(integ.sol.u) == length(integ.sol.pu))
-        # [(su .= pu) for (su, pu) in zip(integ.sol.u, integ.sol.pu.μ)]
+        @assert (length(integ.sol.u) == length(integ.sol.pu))
+        [(su .= pu) for (su, pu) in zip(integ.sol.u, integ.sol.pu.μ)]
     end
 
     OrdinaryDiffEq._postamble!(integ)

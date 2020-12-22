@@ -62,6 +62,7 @@ function DiffEqBase.build_solution(
         pucov = one(uEltype)*I(d)
     elseif alg isa FastEK1
         xcov = SquarerootMatrix(cov)
+        xpredcov = SquarerootMatrix(UpperTriangular(cov)')
         pucov = xcov
     else
         xpredcov = xcov = pucov = PSDMatrix(LowerTriangular(cov))

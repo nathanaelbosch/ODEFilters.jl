@@ -1,18 +1,3 @@
-abstract type AbstractKroneckerMatrix{T<:Real} <: AbstractMatrix{T} end
-struct KroneckerMatrix{T<:Real, L<:AbstractMatrix, R<:AbstractMatrix} <: AbstractKroneckerMatrix{T}
-    left::L
-    right::R
-end
-KroneckerMatrix(M::AbstractMatrix, d::Int) = KroneckerMatrix{eltype(M), typeof(M), typeof(I(d))}(M, I(d))
-Base.size(K::KroneckerMatrix) = Base.size(K.left) .* Base.size(K.right)
-Base.Matrix(K::KroneckerMatrix) = kron(K.left, K.right)
-Base.getindex(K::KroneckerMatrix, I::Vararg{Int, N}) where {N} = getindex(Matrix(K), I...)
-Base.copy(K::KroneckerMatrix{T, L, R}) where {T, L, R} = KroneckerMatrix{T, L, R}(copy(K.left), copy(K.right))
-Base.copy!(dst::KroneckerMatrix, src::KroneckerMatrix) =
-    (Base.copy!(dst.left, src.left); Base.copy!(dst.right, dst.right); nothing)
-
-
-
 struct KronMat{T<:Real, L<:AbstractMatrix{T}, I<:Int} <: AbstractKroneckerMatrix{T}
     left::L
     rightd::I

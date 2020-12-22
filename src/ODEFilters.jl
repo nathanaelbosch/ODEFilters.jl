@@ -34,7 +34,7 @@ include("kroneckermatrix.jl")
 RecursiveArrayTools.recursivecopy(P::Gaussian) = copy(P)
 using GaussianDistributions: logpdf
 const PSDGaussian{T} = Gaussian{Vector{T}, PSDMatrix{T}}
-const SMGaussian{T} = Gaussian{Vector{T}, SquarerootMatrix{T}}
+const SMGaussian{T1, T2, S} = Gaussian{Vector{T1}, SquarerootMatrix{T2, S}}
 const PSDGaussianList{T} = StructArray{PSDGaussian{T}}
 copy(P::Gaussian) = Gaussian(copy(P.μ), copy(P.Σ))
 copy!(dst::Gaussian, src::Gaussian) = (copy!(dst.μ, src.μ); copy!(dst.Σ, src.Σ); nothing)

@@ -1,3 +1,5 @@
+abstract type AbstractKroneckerMatrix{T<:Real} <: AbstractMatrix{T} end
+
 struct KronMat{T<:Real, L<:AbstractMatrix{T}, I<:Int} <: AbstractKroneckerMatrix{T}
     left::L
     rightd::I

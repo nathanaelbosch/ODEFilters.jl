@@ -64,7 +64,7 @@ function DiffEqBase.build_solution(
         xcov = SquarerootMatrix(cov)
         pucov = xcov
     else
-        xcov = pucov = PSDMatrix(LowerTriangular(cov))
+        xpredcov = xcov = pucov = PSDMatrix(LowerTriangular(cov))
     end
     pu = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(pucov)}}(undef, 0)
     x = StructArray{Gaussian{Vector{eltype(prob.u0)}, typeof(xcov)}}(undef, 0)

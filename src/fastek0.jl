@@ -253,7 +253,8 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK0Cache, repeat_step=fa
     PL = P.squareroot.left
 
     # Predict - Mean
-    # TODO This is comparatively slow and allocates!
+    # TODO This is comparatively slow and allocates! The first should be best!
+    m_p = copyto!(m_tmp, mul!(M_tmp, reshape(m, (d, q+1)), Ah'))
     m_p = vec(mul!(M_tmp, reshape(m, (d, q+1)), Ah'))
     m_p = vec(reshape(m, (d, q+1)) * Ah')
 

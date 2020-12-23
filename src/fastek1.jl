@@ -1,3 +1,6 @@
+"""
+"""
+
 Base.@kwdef struct FastEK1 <: AbstractEK
     prior::Symbol = :ibm
     order::Int = 1
@@ -268,11 +271,10 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK1Cache, repeat_step=fa
     cache.diffusion = σ²
 
     # Predict - Cov
-    # mul!(P_tmp2, Ah, PL)
-    # mul!(P_tmp, P_tmp2, P_tmp2')
-    # @. P_tmp += σ²*Qh
-    # Pp = P_tmp
-    Pp = Ah*PL*PL'*Ah' + σ²*Qh
+    mul!(P_tmp2, Ah, PL)
+    mul!(P_tmp, P_tmp2, P_tmp2')
+    @. P_tmp += σ²*Qh
+    Pp = P_tmp
     chol = cholesky(Symmetric(Pp), check=false)
     PpL = chol.U'
     if !issuccess(chol)
@@ -286,16 +288,17 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK1Cache, repeat_step=fa
 
     # Measurement Cov
     @assert iszero(R)
-    S = H*Pp*H'
+    SL = H*PpL
+    S = SL*SL'
 
     # Update
     Sinv = inv(S)
     K = Pp * H' * Sinv
     mf = mp .+ K*z_neg
     PfL = PpL - K*H*PpL
-    P_f = SquarerootMatrix(PfL)
+    Pf = SquarerootMatrix(PfL)
 
-    x_filt = Gaussian(mf, P_f)
+    x_filt = Gaussian(mf, Pf)
     integ.u .= @view mf[I0]
 
     # Estimate error for adaptive steps
@@ -307,7 +310,6 @@ function OrdinaryDiffEq.perform_step!(integ, cache::FastEK1Cache, repeat_step=fa
             tmp, dt * err_tmp, integ.u, integ.uprev,
             integ.opts.abstol, integ.opts.reltol, integ.opts.internalnorm, t)
         integ.EEst = integ.opts.internalnorm(tmp, t) # scalar
-
     end
     if !integ.opts.adaptive || integ.EEst < one(integ.EEst)
         copy!(integ.cache.x, x_filt)
@@ -343,10 +345,9 @@ function OrdinaryDiffEq.postamble!(integ::OrdinaryDiffEq.ODEIntegrator{<:FastEK1
     OrdinaryDiffEq._postamble!(integ)
 end
 
-function smooth_all!(integ, cache::FastEK1ConstantCache)
+function smooth_all!(integ, cache::Union{FastEK1ConstantCache, FastEK1Cache})
     @unpack x, x_preds, t, diffusions = integ.sol
     @unpack A, Q, Precond, d, q = integ.cache
-    @warn "The smoothing is likely to be completely wrong :("
 
     for i in length(x)-1:-1:2
         dt = t[i+1] - t[i]
@@ -354,72 +355,21 @@ function smooth_all!(integ, cache::FastEK1ConstantCache)
         # The "next" state, that is assumed to be smoothed: x[i+1]
         # The estimated diffusion for this interval diffusions[i]
 
+        # T = Precond(dt); Tinv = inv(T)
         Ah = A(dt)
-        # Tinv = Precond(dt)
-        m, P = x[i].μ, x[i].Σ
 
+        m, P = x[i].μ, x[i].Σ
         PL = P.squareroot
         ms, Ps = x[i+1].μ, x[i+1].Σ
         PsL = Ps.squareroot
         mp, Pp = x_preds[i].μ, x_preds[i].Σ  # x_preds is 1 shorter
         PpL = Pp.squareroot
-        σ² = diffusions[i]
 
-        PpLinv = inv(PpL)
-        Ppinv = PpLinv'PpLinv
-        G = PL*(PL' * (Ah' * Ppinv))
-        # mnew = m + vec(reshape((ms - mp), (d, q+1)) * G')
-        m .+= G * (ms .- mp)
+        mnew, PnewL = smooth_step(m, PL, mp, PpL, ms, PsL, Ah, d, q)
 
-        # Joseph-Form:
-        # PnewL = PL - G*(PsL-PpL)
-        PL .-= G*(PsL.-PpL)
-        mnew, PnewL = m, PL
-        Pnew = SquarerootMatrix(PnewL)
-        x[i] = Gaussian(mnew, Pnew)
-    end
-end
-function smooth_all!(integ, cache::FastEK1Cache)
-    @unpack x, x_preds, t, diffusions = integ.sol
-    @unpack A, Q, Precond, d, q = integ.cache
-
-    @unpack P_tmp, P_tmp2, P_tmp3, m_tmp, M_tmp = integ.cache
-    @warn "The smoothing is likely to be completely wrong :("
-
-    for i in length(x)-1:-1:2
-        dt = t[i+1] - t[i]
-        # The "current" state that we want to smooth: x[i]
-        # The "next" state, that is assumed to be smoothed: x[i+1]
-        # The estimated diffusion for this interval diffusions[i]
-
-        # Setup
-        Ah = A(dt)
-        # Tinv = Precond(dt)
-        m, P = x[i].μ, x[i].Σ
-
-        PL = P.squareroot
-        ms, Ps = x[i+1].μ, x[i+1].Σ
-        PsL = Ps.squareroot
-        mp, Pp = x_preds[i].μ, x_preds[i].Σ  # x_preds is 1 shorter
-        PpL = Pp.squareroot
-        σ² = diffusions[i]
-
-        PpLinv = inv(PpL)
-        Ppinv = mul!(P_tmp, PpLinv', PpLinv)
-        G = mul!(P_tmp2, PL, mul!(P_tmp, PL', mul!(P_tmp2, Ah', Ppinv)))
-        # G = PL*(PL' * (Ah' * Ppinv))
-
-        @. m_tmp = ms - mp
-        m .+= G*m_tmp
-
-        # Joseph-Form:
-        # PnewL = PL - G*(PsL-PpL)
-        @. P_tmp3 = PsL - PpL
-        mul!(P_tmp, G, P_tmp3)
-        PL .-= P_tmp
-        # PL .-= G*(PsL.-PpL)
-        mnew, PnewL = m, PL
-        Pnew = SquarerootMatrix(PnewL)
+        Pnew = SquarerootMatrix(Tinv*PnewL)
+        mnew = mnew
+        if any(mnew .< 0) error("something went wrong") end
         x[i] = Gaussian(mnew, Pnew)
     end
 end

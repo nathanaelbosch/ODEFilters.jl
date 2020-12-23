@@ -354,10 +354,9 @@ function OrdinaryDiffEq.postamble!(integ::OrdinaryDiffEq.ODEIntegrator{<:FastEK0
     OrdinaryDiffEq._postamble!(integ)
 end
 
-function smooth_all!(integ, cache::FastEK0ConstantCache)
+function smooth_all!(integ, cache::Union{FastEK0ConstantCache, FastEK0Cache})
     @unpack x, x_preds, t, diffusions = integ.sol
     @unpack A, Q, Precond, d, q = integ.cache
-    @warn "The smoothing is likely to be completely wrong :("
 
     for i in length(x)-1:-1:2
         dt = t[i+1] - t[i]
@@ -366,72 +365,43 @@ function smooth_all!(integ, cache::FastEK0ConstantCache)
         # The estimated diffusion for this interval diffusions[i]
 
         Ah = A(dt)
-        # Tinv = Precond(dt)
         m, P = x[i].μ, x[i].Σ
-
         PL = P.squareroot.left
         ms, Ps = x[i+1].μ, x[i+1].Σ
         PsL = Ps.squareroot.left
         mp, Pp = x_preds[i].μ, x_preds[i].Σ  # x_preds is 1 shorter
         PpL = Pp.squareroot.left
-        σ² = diffusions[i]
 
-        PpLinv = inv(PpL)
-        Ppinv = PpLinv'PpLinv
-        G = PL*(PL' * (Ah' * Ppinv))
-        # mnew = m + vec(reshape((ms - mp), (d, q+1)) * G')
-        m .+= vec(reshape((ms - mp), (d, q+1)) * G')
+        mnew, PnewL = smooth_step(m, PL, mp, PpL, ms, PsL, Ah, d, q)
 
-        # Joseph-Form:
-        # PnewL = PL - G*(PsL-PpL)
-        PL .-= G*(PsL.-PpL)
-        mnew, PnewL = m, PL
         Pnew = SquarerootMatrix(KronMat(PnewL, d))
         x[i] = Gaussian(mnew, Pnew)
     end
 end
-function smooth_all!(integ, cache::FastEK0Cache)
-    @unpack x, x_preds, t, diffusions = integ.sol
-    @unpack A, Q, Precond, d, q = integ.cache
 
-    @unpack P_tmp, P_tmp2, P_tmp3, m_tmp, M_tmp = integ.cache
-    @warn "The smoothing is likely to be completely wrong :("
-
-    for i in length(x)-1:-1:2
-        dt = t[i+1] - t[i]
-        # The "current" state that we want to smooth: x[i]
-        # The "next" state, that is assumed to be smoothed: x[i+1]
-        # The estimated diffusion for this interval diffusions[i]
-
-        # Setup
-        Ah = A(dt)
-        # Tinv = Precond(dt)
-        m, P = x[i].μ, x[i].Σ
-
-        PL = P.squareroot.left
-        ms, Ps = x[i+1].μ, x[i+1].Σ
-        PsL = Ps.squareroot.left
-        mp, Pp = x_preds[i].μ, x_preds[i].Σ  # x_preds is 1 shorter
-        PpL = Pp.squareroot.left
-        σ² = diffusions[i]
-
-        PpLinv = inv(PpL)
-        Ppinv = mul!(P_tmp, PpLinv', PpLinv)
-        G = mul!(P_tmp2, PL, mul!(P_tmp, PL', mul!(P_tmp2, Ah', Ppinv)))
-        # G = PL*(PL' * (Ah' * Ppinv))
-
-        @. m_tmp = ms - mp
-        mul!(M_tmp, reshape(m_tmp, (d, q+1)), G')
-        m .+= vec(M_tmp)
-
-        # Joseph-Form:
-        # PnewL = PL - G*(PsL-PpL)
-        @. P_tmp3 = PsL - PpL
-        mul!(P_tmp, G, P_tmp3)
-        PL .-= P_tmp
-        # PL .-= G*(PsL.-PpL)
-        mnew, PnewL = m, PL
-        Pnew = SquarerootMatrix(KronMat(PnewL, d))
-        x[i] = Gaussian(mnew, Pnew)
+function smooth_step(m, PL, mp, PpL, ms, PsL, Ah, d, q, T=nothing)
+    PpLinv = inv(PpL)
+    Ppinv = PpLinv'PpLinv
+    G = (PL*PL') * Ah' * Ppinv
+    # mnew = m + vec(reshape((ms - mp), (d, q+1)) * G')
+    if length(m) != size(G)[1]
+        mout = m + vec(reshape((ms - mp), (d, q+1)) * G')
+    else
+        mout = m + G*(ms - mp)
     end
+
+    # Would this work?
+    # small_qr_input = [PL G*(PpL-PsL)]'
+    Pout = (PL*PL') + G * (PsL*PsL' - PpL*PpL') * G'
+    @info "._." G (PL*PL') Pout (PsL*PsL' - PpL*PpL')
+    PLout = cholesky(Symmetric(Pout)).L
+
+    # TI = inv(T)
+    # @info "smooth step" TI*m TI*mout TI*G*T
+    # if any(abs.(m) .> 1e4)
+    #     @info "Something went wrong during smoothing" m mout G
+    #     error("Something's Fishy")
+    # end
+
+    return mout, PLout
 end

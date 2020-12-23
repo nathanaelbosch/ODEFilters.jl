@@ -18,7 +18,8 @@ import DiffEqProblemLibrary.ODEProblemLibrary: prob_ode_lotkavoltera, prob_ode_f
 import ODEFilters: remake_prob_with_jac
 
 
-@testset "$ALG"for ALG in (FastEK0, FastEK1)
+# @testset "$ALG"for ALG in (FastEK0, FastEK1)
+@testset "$ALG"for ALG in (FastEK1,)
 
     @testset "$probname" for (prob, probname) in [
         (remake_prob_with_jac(prob_ode_lotkavoltera), "lotkavolterra"),
@@ -34,7 +35,7 @@ import ODEFilters: remake_prob_with_jac
             @test sol.u ≈ true_sol.(sol.t) rtol=1e-8
         end
 
-        @testset "Adaptive step w/o smoothing; order $q" for q in 3:2:5
+        @testset "Adaptive steps w/o smoothing; order $q" for q in 3:2:5
             sol = solve(prob, ALG(order=q, smooth=false),
                         dense=false,
                         abstol=1e-6, reltol=1e-6)
@@ -42,8 +43,12 @@ import ODEFilters: remake_prob_with_jac
             @test sol.u ≈ true_sol.(sol.t) rtol=(ALG==FastEK0 ? 1e-5 : 1e-2)
         end
 
-        # t_eval = prob.tspan[1]:0.05:prob.tspan[end]
-        # true_dense_vals = true_sol.(t_eval)
+        t_eval = prob.tspan[1]:0.05:prob.tspan[end]
+        true_dense_vals = true_sol.(t_eval)
+        @testset "Adaptive steps with smoothing; order $q" for q in 3:2:7
+            sol = solve(prob, ALG(order=q), abstol=1e-6, reltol=1e-6)
+            @test sol.u[end] ≈ true_sol.u[end] rtol=1e-3
+            @test sol.u ≈ true_sol.(sol.t) rtol=1e-3
+        end
     end
-
 end

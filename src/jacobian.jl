@@ -16,7 +16,8 @@ function remake_prob_with_jac(prob::ODEProblem)
             analytic=prob.f.analytic,
         )
         return remake(prob, f=f)
-    catch
-        error("Could not generate a jacobian for the problem")
+    catch e
+        @error "Could not generate a jacobian for the problem"
+        throw(e)
     end
 end
